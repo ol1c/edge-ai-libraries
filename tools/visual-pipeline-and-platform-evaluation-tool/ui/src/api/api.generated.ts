@@ -312,6 +312,17 @@ const injectedRtkApi = api
         query: () => ({ url: `/models` }),
         providesTags: ["models"],
       }),
+      listHubModels: build.mutation<
+        ListHubModelsApiResponse,
+        ListHubModelsApiArg
+      >({
+        query: (queryArg) => ({
+          url: `/models/list`,
+          method: "POST",
+          body: queryArg.modelHubListRequest,
+        }),
+        invalidatesTags: ["models"],
+      }),
       uploadModel: build.mutation<UploadModelApiResponse, UploadModelApiArg>({
         query: (queryArg) => ({
           url: `/models/upload`,
@@ -766,6 +777,11 @@ export type GetModelDownloadJobStatusApiArg = {
 export type GetModelsApiResponse =
   /** status 200 List of all installed and available models */ Model[];
 export type GetModelsApiArg = void;
+export type ListHubModelsApiResponse =
+  /** status 200 Successful Response */ ModelHubListResponse;
+export type ListHubModelsApiArg = {
+  modelHubListRequest: ModelHubListRequest;
+};
 export type UploadModelApiResponse = /** status 200 Successful Response */
   | any
   | /** status 201 Model uploaded successfully */ ModelUploadResponse;
@@ -936,6 +952,8 @@ export type StatusResponse = {
   status: AppStatus;
   message: string | null;
   ready: boolean;
+  version: string;
+  revision: string;
 };
 export type BenchmarkTestCase = {
   id: number;
@@ -1014,6 +1032,12 @@ export type BenchmarkTestCaseRun = {
   media_usage: number | null;
   memory_usage: number | null;
   power_usage: number | null;
+  latency_avg_ms: number | null;
+  latency_avg_stddev_ms: number | null;
+  latency_max_ms: number | null;
+  latency_max_stddev_ms: number | null;
+  latency_min_ms: number | null;
+  latency_min_stddev_ms: number | null;
   score_total: number | null;
   score_performance: number | null;
   score_efficiency: number | null;
@@ -1077,6 +1101,12 @@ export type BenchmarkTestCaseRunDetails = {
   media_usage: number | null;
   memory_usage: number | null;
   power_usage: number | null;
+  latency_avg_ms: number | null;
+  latency_avg_stddev_ms: number | null;
+  latency_max_ms: number | null;
+  latency_max_stddev_ms: number | null;
+  latency_min_ms: number | null;
+  latency_min_stddev_ms: number | null;
   score_total: number | null;
   score_performance: number | null;
   score_efficiency: number | null;
@@ -1288,7 +1318,15 @@ export type ModelDownloadJobSummary = {
   model_name: string;
   source: ModelSource;
 };
-export type ModelCategory = "classification" | "detection" | "genai";
+export type ModelCategory =
+  | "image_classification"
+  | "object_detection"
+  | "image_segmentation"
+  | "pose_estimation"
+  | "vision_language_models"
+  | "large_language_models"
+  | "automatic_speech_recognition"
+  | "text_to_speech";
 export type ModelInstallStatus =
   | "installed"
   | "not_installed"
@@ -1309,6 +1347,8 @@ export type Model = {
   name: string;
   /** Human-readable model name. */
   display_name: string;
+  /** Human-readable explanation of what the model detects or classifies, or null when not provided. */
+  description?: string | null;
   /** Logical model category, or null when unknown. */
   category?: ModelCategory | null;
   /** Upstream hub the model is downloaded from. */
@@ -1319,10 +1359,40 @@ export type Model = {
   variants?: ModelVariant[];
   /** List of predefined-pipeline ids that reference this model. Non-empty means the model is recommended. */
   used_by_pipelines?: string[];
-  /** Whether the model is marked as a default install candidate in supported_models.yaml. The Models page uses this flag to pre-select recommended models in the bulk-install UI. */
+  /** Whether at least one predefined pipeline references this model. The Models page uses this flag to pre-select recommended models in the bulk-install UI. */
   default?: boolean;
   /** Comma-separated list of devices on which the model cannot run (e.g. 'NPU'), or null when no restrictions exist. */
   unsupported_devices?: string | null;
+};
+export type ModelHubListResponse = {
+  hub: string;
+  items: {
+    [key: string]: any;
+  }[];
+  /** Number of items returned in this response. */
+  count?: number | null;
+  /** Total number of items available, when the hub reports it. */
+  total?: number | null;
+  limit: number;
+  offset: number;
+  /** Whether another page is available. */
+  has_more?: boolean | null;
+  /** Offset to request the next page, when available. */
+  next_offset?: number | null;
+};
+export type ModelHubListRequest = {
+  /** Model hub to search, such as huggingface. */
+  hub: string;
+  /** Hub-specific listing filters, such as author, search, or tags. */
+  filters?: {
+    [key: string]: any;
+  };
+  limit?: number;
+  offset?: number;
+  /** Optional Base64-encoded connection overrides for this request. */
+  override_credentials?: {
+    [key: string]: string;
+  } | null;
 };
 export type ModelUploadResponse = {
   /** Newly registered model entry. */
@@ -1332,6 +1402,7 @@ export type BodyUploadModel = {
   model_name: string;
   category: ModelCategory;
   file: string;
+  description?: string | null;
 };
 export type ModelDownloadJobItem = {
   /** Model name. */
@@ -1352,6 +1423,10 @@ export type ModelDownloadJobResponse = {
 export type ModelDownloadRequest = {
   /** List of supported-model names to install. Must be non-empty and unique. */
   names: string[];
+  /** Upstream hub used for names not found in the model catalog. */
+  hub?: ModelSource | null;
+  /** Model category, required when `hub` is `huggingface` (ignored for other hubs). */
+  category?: ModelCategory | null;
 };
 export type ModelStatusItem = {
   /** Internal model identifier. */
@@ -1743,6 +1818,7 @@ export const {
   useLazyGetModelDownloadJobStatusQuery,
   useGetModelsQuery,
   useLazyGetModelsQuery,
+  useListHubModelsMutation,
   useUploadModelMutation,
   useStartModelDownloadMutation,
   useCheckModelsStatusMutation,

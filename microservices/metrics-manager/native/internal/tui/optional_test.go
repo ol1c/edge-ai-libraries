@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -84,6 +85,42 @@ func TestTurbostatPanelRequiresSamples(t *testing.T) {
 turbostat_smi{host="itest",core="-",cpu="-"} 3
 `)
 	wantContains(t, view, "Turbostat")
+	wantContains(t, view, "IPC CPU 8")
+	wantContains(t, view, "SMI system")
+}
+
+func TestTurbostatIRQAndNMITable(t *testing.T) {
+	exposition := `turbostat_irq{cpu="10",core="3"} 45
+turbostat_nmi{cpu="2",core="1"} 0
+turbostat_irq{cpu="8",core="0"} 12
+turbostat_nmi{cpu="8",core="0"} 3
+turbostat_irq{cpu="-",core="-"} 57
+turbostat_nmi{core="4"} 1
+turbostat_ipc{cpu="8",core="0"} 1.5
+turbostat_smi{cpu="-",core="-"} 2
+`
+	panel := buildTurbostatPanel(NewIndex(parseFixture(t, exposition)))
+	var gotColumns []string
+	for _, column := range panel.TableColumns {
+		gotColumns = append(gotColumns, column.title)
+	}
+	if want := []string{"CPU", "IRQ", "NMI"}; !reflect.DeepEqual(gotColumns, want) {
+		t.Errorf("table columns = %v, want %v", gotColumns, want)
+	}
+	wantRows := [][]string{
+		{"CPU 2", "-", "0"},
+		{"CPU 8", "12", "3"},
+		{"CPU 10", "45", "-"},
+		{"core 4", "-", "1"},
+		{"system", "57", "-"},
+	}
+	if !reflect.DeepEqual(panel.TableRows, wantRows) {
+		t.Errorf("table rows = %v, want %v", panel.TableRows, wantRows)
+	}
+
+	view := renderFixture(t, exposition)
+	wantContains(t, view, "IRQ")
+	wantContains(t, view, "NMI")
 	wantContains(t, view, "IPC CPU 8")
 	wantContains(t, view, "SMI system")
 }

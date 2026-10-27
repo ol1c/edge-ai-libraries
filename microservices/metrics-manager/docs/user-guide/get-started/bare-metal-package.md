@@ -314,7 +314,7 @@ What each panel shows:
 | Per-CPU telemetry / DRAM power | Opt-in table with one row per CPU (`CPU 1`, `CPU 8`, etc.), `frequency` and `temperature` columns (`-` where one reading is missing); DRAM RAPL power where supported |
 | Device interrupts (counters) | Opt-in cumulative `interrupts_total` per numbered device IRQ; use `rate()` for IRQ/s |
 | NIC driver | Opt-in `ethtool_*` readings per interface; available fields depend on the NIC driver |
-| Turbostat | Opt-in IPC, SMI and available per-CPU diagnostics from a kernel-matched turbostat binary |
+| Turbostat | Opt-in table with one row per CPU and `IRQ`/`NMI` columns (`-` for a missing reading); IPC, SMI and other available per-CPU diagnostics remain below the table |
 
 These additional panels are in Overview; enabling them does not add new charts
 to Trends or Details. If the extra rows exceed the terminal height, scroll the

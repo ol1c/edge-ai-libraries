@@ -98,12 +98,75 @@ func buildOptionalPanels(idx *Index) []OptionalPanel {
 		appendPanel(*interfaces[key])
 	}
 
-	turbostat := OptionalPanel{Title: "Turbostat"}
+	appendPanel(buildTurbostatPanel(idx))
+
+	return panels
+}
+
+func buildTurbostatPanel(idx *Index) OptionalPanel {
+	panel := OptionalPanel{
+		Title: "Turbostat",
+		TableColumns: []column{
+			{title: "CPU", width: 10, left: true},
+			{title: "IRQ", width: 12},
+			{title: "NMI", width: 12},
+		},
+	}
+	type readings struct{ irq, nmi Reading }
+	cpus := make(map[string]*readings)
+	for _, metric := range []struct {
+		name string
+		nmi  bool
+	}{
+		{"turbostat_irq", false},
+		{"turbostat_nmi", true},
+	} {
+		for _, sample := range idx.All(metric.name) {
+			if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				continue
+			}
+			cpu := sample.Labels["cpu"]
+			if cpu == "" || cpu == "-" {
+				cpu = "system"
+				if core := sample.Labels["core"]; core != "" && core != "-" {
+					cpu = "core " + core
+				}
+			}
+			values := cpus[cpu]
+			if values == nil {
+				values = &readings{}
+				cpus[cpu] = values
+			}
+			if metric.nmi {
+				values.nmi = reading(sample.Value)
+			} else {
+				values.irq = reading(sample.Value)
+			}
+		}
+	}
+	ids := make([]string, 0, len(cpus))
+	for id := range cpus {
+		ids = append(ids, id)
+	}
+	sortCPUIds(ids)
+	for _, id := range ids {
+		irq, nmi := "-", "-"
+		if cpus[id].irq.OK {
+			irq = fmt.Sprintf("%.0f", cpus[id].irq.Value)
+		}
+		if cpus[id].nmi.OK {
+			nmi = fmt.Sprintf("%.0f", cpus[id].nmi.Value)
+		}
+		label := "CPU " + sanitize(id, 20)
+		if id == "system" || strings.HasPrefix(id, "core ") {
+			label = id
+		}
+		panel.TableRows = append(panel.TableRows, []string{label, irq, nmi})
+	}
+
 	for _, metric := range []struct{ name, label, unit string }{
 		{"turbostat_ipc", "IPC", ""},
 		{"turbostat_smi", "SMI", ""},
-		{"turbostat_irq", "IRQ", ""},
-		{"turbostat_nmi", "NMI", ""},
 		{"turbostat_busy_percent", "busy", " %"},
 		{"turbostat_busy_frequency_mhz", "busy frequency", " MHz"},
 		{"turbostat_core_temperature_celsius", "core temperature", " °C"},
@@ -115,12 +178,11 @@ func buildOptionalPanels(idx *Index) []OptionalPanel {
 			} else if core := sample.Labels["core"]; core != "" && core != "-" {
 				place = "core " + core
 			}
-			addOptionalSample(&turbostat, metric.label+" "+place, sample, metric.unit)
+			addOptionalSample(&panel, metric.label+" "+place, sample, metric.unit)
 		}
 	}
-	appendPanel(turbostat)
 
-	return panels
+	return panel
 }
 
 func buildPerCPUPanel(idx *Index) OptionalPanel {
@@ -165,14 +227,7 @@ func buildPerCPUPanel(idx *Index) OptionalPanel {
 	for id := range cpus {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, aErr := strconv.Atoi(ids[i])
-		b, bErr := strconv.Atoi(ids[j])
-		if aErr == nil && bErr == nil && a != b {
-			return a < b
-		}
-		return ids[i] < ids[j]
-	})
+	sortCPUIds(ids)
 	for _, id := range ids {
 		cpu := cpus[id]
 		frequency, temperature := "-", "-"
@@ -185,6 +240,17 @@ func buildPerCPUPanel(idx *Index) OptionalPanel {
 		panel.TableRows = append(panel.TableRows, []string{"CPU " + sanitize(id, 20), frequency, temperature})
 	}
 	return panel
+}
+
+func sortCPUIds(ids []string) {
+	sort.Slice(ids, func(i, j int) bool {
+		a, aErr := strconv.Atoi(ids[i])
+		b, bErr := strconv.Atoi(ids[j])
+		if aErr == nil && bErr == nil && a != b {
+			return a < b
+		}
+		return ids[i] < ids[j]
+	})
 }
 
 func addOptionalSample(panel *OptionalPanel, label string, sample promtext.Sample, unit string) {

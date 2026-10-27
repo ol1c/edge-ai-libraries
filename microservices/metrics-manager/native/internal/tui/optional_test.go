@@ -28,7 +28,7 @@ func TestOptionalPanelsAppearOnlyWithSamples(t *testing.T) {
 		t.Fatalf("baseline unexpectedly has optional panels: %+v", baseline.Optional)
 	}
 	view := renderFixture(t, hostExposition)
-	for _, title := range []string{"Package temperature (100 ms)", "DRAM bandwidth", "RAPL power", "DRAM power", "Per-CPU telemetry",
+	for _, title := range []string{"Package temperature (100 ms)", "RAPL power", "DRAM power", "Per-CPU telemetry",
 		"Device interrupts (counters)", "NIC driver enp1s0"} {
 		if strings.Contains(view, title) {
 			t.Errorf("baseline contains opt-in panel %q", title)
@@ -71,12 +71,15 @@ rapl_power_power_w{host="itest",domain="package-0"} 6.51
 	wantContains(t, view, "psys")
 }
 
-func TestDRAMBandwidthPanelRequiresSamplesAndShowsAllFields(t *testing.T) {
+func TestMemoryPanelShowsDRAMBandwidthColumnsOnlyWithSamples(t *testing.T) {
 	baseline := buildFixture(t, hostExposition)
 	for _, panel := range baseline.Optional {
 		if panel.Title == "DRAM bandwidth" {
-			t.Fatal("DRAM bandwidth panel visible without samples")
+			t.Fatal("DRAM bandwidth should be part of Memory, not an optional panel")
 		}
+	}
+	if strings.Contains(renderFixture(t, hostExposition), "DRAM bandwidth") {
+		t.Fatal("Memory contains an empty DRAM bandwidth row")
 	}
 
 	exposition := hostExposition + `memory_bandwidth_read_mibps{host="itest"} 2048
@@ -84,36 +87,25 @@ memory_bandwidth_write_mibps{host="itest"} 128
 memory_bandwidth_total_mibps{host="itest"} 2176
 `
 	dash := buildFixture(t, exposition)
-	var bandwidth *OptionalPanel
-	for i := range dash.Optional {
-		if dash.Optional[i].Title == "DRAM bandwidth" {
-			bandwidth = &dash.Optional[i]
-			break
-		}
+	if len(dash.Optional) != 0 {
+		t.Fatalf("bandwidth created an optional panel: %+v", dash.Optional)
 	}
-	if bandwidth == nil {
-		t.Fatal("DRAM bandwidth panel missing despite samples")
+	view := renderFixture(t, exposition)
+	for _, want := range []string{"Memory", "DRAM bandwidth", "read", "write", "total"} {
+		wantContains(t, view, want)
 	}
-	want := []OptionalRow{
-		{Label: "read", Value: "2.00 GiB/s"},
-		{Label: "write", Value: "128 MiB/s"},
-		{Label: "total", Value: "2.12 GiB/s"},
+	if !regexp.MustCompile(`DRAM bandwidth\s+2\.00 GiB/s\s+128 MiB/s\s+2\.12 GiB/s`).MatchString(view) {
+		t.Errorf("Memory DRAM row missing or values in wrong columns:\n%s", view)
 	}
-	if !reflect.DeepEqual(bandwidth.Rows, want) {
-		t.Errorf("DRAM bandwidth rows = %+v, want %+v", bandwidth.Rows, want)
-	}
-	wantContains(t, renderFixture(t, exposition), "DRAM bandwidth")
 
-	partial := buildFixture(t, "memory_bandwidth_write_mibps 0\n")
-	if len(partial.Optional) != 1 || partial.Optional[0].Title != "DRAM bandwidth" {
-		t.Fatalf("partial bandwidth panels = %+v", partial.Optional)
+	partial := renderFixture(t, "memory_bandwidth_write_mibps 0\n")
+	if !regexp.MustCompile(`DRAM bandwidth\s+-\s+0 MiB/s\s+-`).MatchString(partial) {
+		t.Errorf("missing bandwidth reading not shown in its column:\n%s", partial)
 	}
-	if want := []OptionalRow{
-		{Label: "read", Value: "-"},
-		{Label: "write", Value: "0 MiB/s"},
-		{Label: "total", Value: "-"},
-	}; !reflect.DeepEqual(partial.Optional[0].Rows, want) {
-		t.Errorf("partial bandwidth rows = %+v, want %+v", partial.Optional[0].Rows, want)
+	for _, panel := range buildFixture(t, "memory_bandwidth_write_mibps 0\n").Optional {
+		if panel.Title == "DRAM bandwidth" {
+			t.Fatal("partial bandwidth created a second panel")
+		}
 	}
 }
 

@@ -608,6 +608,26 @@ func (m Model) memorySection() string {
 	b.WriteString(field("used", used))
 	b.WriteString(field("available", formatPercent(mem.AvailablePercent)))
 
+	valid := func(r Reading) bool {
+		return r.OK && !math.IsNaN(r.Value) && !math.IsInf(r.Value, 0)
+	}
+	if valid(mem.ReadMiBps) || valid(mem.WriteMiBps) || valid(mem.TotalMiBps) {
+		value := func(r Reading) string {
+			if !valid(r) {
+				return "-"
+			}
+			return formatBandwidthMiBps(r)
+		}
+		b.WriteString(responsiveTable([]column{
+			{title: "metric", width: 18, left: true},
+			{title: "read", width: 14},
+			{title: "write", width: 14},
+			{title: "total", width: 14},
+		}, [][]string{{
+			"DRAM bandwidth", value(mem.ReadMiBps), value(mem.WriteMiBps), value(mem.TotalMiBps),
+		}}, m.panelWidth()))
+	}
+
 	return b.String()
 }
 

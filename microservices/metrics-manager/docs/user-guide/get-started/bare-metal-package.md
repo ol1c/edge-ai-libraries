@@ -106,9 +106,9 @@ mm-tui
 
 The quickest way to trust a reading is to make it move.
 
-**Memory bandwidth.** Watch the DRAM bandwidth panel while writing a few
-gigabytes into RAM. Its read, write and total values should jump from tens of
-MiB/s to thousands and settle back. If the panel is absent, the service may be
+**Memory bandwidth.** Watch the `DRAM bandwidth` row in the Memory panel while
+writing a few gigabytes into RAM. Its `read`, `write` and `total` columns should
+jump from tens of MiB/s to thousands and settle back. If the row is absent, the service may be
 running but unable to open perf counters; see
 [No memory bandwidth](#when-something-is-missing).
 
@@ -297,8 +297,8 @@ readings stay on screen and the age keeps climbing rather than the panel
 emptying.
 
 CPU and memory panels are always present; GPU appears once qmassa reports a
-device, and NPU on machines that have one. RAPL power and DRAM bandwidth
-appear only when their collectors can read the corresponding counters. The
+device, and NPU on machines that have one. The RAPL power panel and the DRAM
+bandwidth row inside Memory appear only when their collectors publish samples. The
 opt-in panels for high-resolution package temperature, DRAM power, per-CPU
 telemetry, device IRQ counters and NIC driver statistics also require samples.
 Merely installing the package does not add empty panels. The GPU heading names the
@@ -310,11 +310,10 @@ What each panel shows:
 |---|---|
 | Header | CPU model, thread count, kernel release |
 | CPU | Usage, frequency, package temperature and power against TDP, base and per-class turbo ceilings, uncore frequency, idle-state residency, and a row per core class with the evidence for the split |
-| Memory | Used and available RAM |
+| Memory | Used and available RAM; when collected, one `DRAM bandwidth` row with `read`, `write` and `total` columns (`-` for a missing reading) |
 | GPU | Power, temperature, memory, engine occupancy, per-tile frequencies and throttle reasons, and the processes using the device |
 | NPU | Utilisation, frequency, power, temperature, bandwidth, memory, tile configuration and PCI power state (`D0`–`D3cold`) when published |
 | Processes | The busiest by CPU and RSS, with OS thread count and owner |
-| DRAM bandwidth | System-wide memory-controller read, write and total throughput (MiB/s); visible only when `mm-plugin-membw` publishes samples |
 | RAPL power | Top-level RAPL domains including `package-0` and `psys` platform power (W), when readable; not the per-component subdomains |
 | Package temperature (100 ms) | Opt-in sample and one-second min/max/mean of package sensors |
 | Per-CPU telemetry / DRAM power | Opt-in table with one row per CPU (`CPU 1`, `CPU 8`, etc.), `frequency` and `temperature` columns (`-` where one reading is missing); DRAM RAPL power where supported |
@@ -322,12 +321,28 @@ What each panel shows:
 | NIC driver | Opt-in `ethtool_*` readings per interface; available fields depend on the NIC driver |
 | Turbostat | Opt-in table with one row per CPU and `IRQ`/`NMI` columns (`-` for a missing reading); IPC, SMI and other available per-CPU diagnostics remain below the table |
 
-These additional panels are in Overview; enabling them does not add new charts
-to Trends or Details. If the extra rows exceed the terminal height, scroll the
-Overview. The DRAM bandwidth panel uses `memory_bandwidth_*_mibps` when
-`mm-plugin-membw` can read the controller counters. RAPL power uses
+These additional panels are in Overview. If the extra rows exceed the terminal
+height, scroll the Overview. The Memory row uses
+`memory_bandwidth_*_mibps` when `mm-plugin-membw` can read the controller
+counters. RAPL power uses
 `rapl_power_power_w{domain="..."}` from the optional `mm-plugin-rapl` service.
-The panel appears only after that service is manually enabled and publishes readings.
+The RAPL panel appears only after that service is manually enabled and
+publishes readings. Details also offers DRAM read, write and total bandwidth
+charts, and a separate RAPL power chart for each available domain; these are
+not added to the default Trends charts.
+
+On an upgrade, `/etc/metrics-manager/tui-charts.json` is preserved if locally
+modified. If Details does not list the new plots, add these entries to its
+`details.metrics` array (or merge them from `tui-charts.json.dpkg-dist`) and
+restart `mm-tui`:
+
+```json
+{"metric": "memory.readMiBps", "title": "DRAM read", "unit": "MiB/s"},
+{"metric": "memory.writeMiBps", "title": "DRAM write", "unit": "MiB/s"},
+{"metric": "rapl.powerW", "title": "RAPL power", "unit": "W"}
+```
+
+The existing `memory.bandwidthMiBps` entry is the total bandwidth chart.
 
 The Trends tab retains the most recent five minutes by default. It shows CPU
 utilisation, memory usage, CPU temperature, and utilisation and temperature for
@@ -392,7 +407,7 @@ the selection does not restart collection or discard earlier samples.
 - `a` opens alert details and `h` opens help. Returning preserves the selected metric.
 
 The metric list uses up to three columns within labelled sections, always in
-the order **CPU, Memory, each GPU separately, NPU**. GPU IDs sort numerically
+the order **CPU, Memory, RAPL power (if available), each GPU separately, NPU**. GPU IDs sort numerically
 where numeric IDs are available. Different sections never share a row.
 Core-class readings stay in CPU, and each GPU's temperature, engines, frequency,
 power and VRAM stay together. Keyboard navigation skips section headings;
@@ -408,7 +423,8 @@ remains selected if it disappears, even after its retained history expires.
 No metric is substituted silently.
 
 The default selection includes CPU total and per-class P/E/LP-E usage,
-temperature, frequency and package power; RAM use and system DRAM bandwidth;
+temperature, frequency and package power; RAM use and DRAM read, write and
+total bandwidth (MiB/s); RAPL power for each published domain (W);
 per-GPU aggregate/engine utilisation, temperature, per-tile actual frequency,
 graphics power and dedicated VRAM percentage; NPU utilisation, temperature,
 frequency, power and memory. Frequency charts use MHz. NPU memory uses MiB

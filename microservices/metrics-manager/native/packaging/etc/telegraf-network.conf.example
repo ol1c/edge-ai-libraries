@@ -10,3 +10,8 @@
   interfaces = []
   # The TUI uses net_* fields with host/interface tags and measurement timestamps.
   # Keep metric_version = 1 and export_timestamp = true in prometheus_client.
+
+# Driver-specific NIC counters (availability and names depend on the driver).
+# Like net, this reads interfaces in the service's network namespace.
+[[inputs.ethtool]]
+  interface_include = ["eth*", "en*"]

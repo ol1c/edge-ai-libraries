@@ -26,7 +26,7 @@ Everything starts at installation and again at boot. The raw readings are at
 | Path | Contents |
 |---|---|
 | `/usr/bin/mm-tui` | Terminal dashboard |
-| `/usr/libexec/metrics-manager/` | Telegraf, qmassa and the three collector plugins |
+| `/usr/libexec/metrics-manager/` | Telegraf, qmassa and the collector plugins |
 | `/etc/metrics-manager/telegraf.conf` | Collection and publishing configuration |
 | `/etc/metrics-manager/metrics-manager.env` | Settings shared by every service |
 | `/etc/metrics-manager/telegraf.d/` | Drop-in directory for local configuration |
@@ -81,6 +81,42 @@ sampling interval. Telegraf itself is configured by
 `/etc/metrics-manager/telegraf.conf`, with local additions in
 `/etc/metrics-manager/telegraf.d/*.conf`, which is read afterwards and left
 alone by upgrades.
+
+Optional collectors are shipped as examples, not enabled by installation.
+Install only those needed on this machine (do not overwrite an existing,
+locally edited drop-in):
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-network.conf /etc/metrics-manager/telegraf.d/network.conf
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-temperature.conf /etc/metrics-manager/telegraf.d/temperature.conf
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-interrupts.conf /etc/metrics-manager/telegraf.d/interrupts.conf
+sudo systemctl restart metrics-manager-telegraf.service
+```
+
+The network example enables both `net` and `ethtool`. Temperature adds 100 ms
+package samples and one-second min/max/mean alongside the existing one-second
+reading; interrupts adds numbered device IRQ counters. `ethtool` fields depend
+on the NIC driver. If `network.conf` is already installed, add the
+`[[inputs.ethtool]]` block from the updated example to that file rather than
+reinstalling it and losing your interface selection. Each corresponding TUI
+panel appears only after its metrics reach the endpoint. Remove an example
+from `telegraf.d` and restart the service to disable it.
+
+Extra per-CPU powerstat measurements need the **privileged** Telegraf instance,
+not the regular `telegraf.d` directory:
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-powerstat-extra.conf /etc/metrics-manager/powerstat.d/extra.conf
+sudo systemctl restart metrics-manager-powerstat.service
+```
+
+This adds per-CPU frequency and temperature without duplicating package power
+or C-state series. On a host with a readable DRAM RAPL subzone, edit
+`/etc/metrics-manager/powerstat.d/extra.conf` to set
+`package_metrics = ["current_dram_power_consumption"]`, then restart the
+powerstat service. Do not enable this on hosts without that subzone: Telegraf
+logs a collection error on every interval. Changes to the main powerstat
+configuration remain independent of this optional drop-in.
 
 ```bash
 sudo systemctl restart 'metrics-manager-*.service'
@@ -194,6 +230,19 @@ sudo -u metrics-manager /usr/libexec/metrics-manager/mm-plugin-npu -once
 
 Run under `sudo` that will fail on the permissions — that is the expected way
 to tell an absent NPU from a permissions problem.
+
+**No memory bandwidth.** `mm-plugin-membw` reports system-wide DRAM read,
+write and total throughput in MiB/s (not GPU-only bandwidth). Check
+`journalctl -u metrics-manager-membw.service` and
+`cat /proc/sys/kernel/perf_event_paranoid`. On kernels that set this value to
+4, `CAP_PERFMON` alone may be refused for uncore events; the service will stay
+running but idle with a `permission denied` diagnostic. A root diagnostic
+`sudo /usr/libexec/metrics-manager/mm-plugin-membw -once` can confirm that
+the counters themselves work.
+An administrator may choose a less restrictive perf policy, after assessing
+the information-exposure implications; do not grant the service broad
+`CAP_SYS_ADMIN` merely to make the reading appear. Restart the membw service
+after changing host perf policy so it can reopen the counters.
 
 **Nothing at all, and Telegraf will not start.** A stale socket is the usual
 cause after an unclean shutdown; the unit clears it on start, so a restart is

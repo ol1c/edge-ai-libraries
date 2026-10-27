@@ -365,6 +365,7 @@ type Dashboard struct {
 	NetworkLimited bool
 	Storage        []StorageResource
 	StorageLimited bool
+	Optional       []OptionalPanel
 
 	// Processes are the busiest on the machine, by CPU and by resident
 	// memory. The collector caps how many it publishes.
@@ -389,6 +390,7 @@ func BuildDashboard(samples []promtext.Sample) Dashboard {
 		Memory:    buildMemory(idx),
 		GPUs:      buildGPUs(idx),
 		NPU:       buildNPU(idx),
+		Optional:  buildOptionalPanels(idx),
 		Processes: buildProcesses(idx),
 	}
 }

@@ -220,6 +220,9 @@ func (m Model) panelGrid(width int) string {
 			return "Storage\nResource limit reached; adjust storage.mountPoints/devices or storage.maxFilesystems/maxDevices."
 		})
 	}
+	for _, panel := range m.dash.Optional {
+		auxiliary = append(auxiliary, func(Model) string { return optionalSection(panel) })
+	}
 	for _, render := range auxiliary {
 		shortest := 0
 		for i := 1; i < len(columns); i++ {

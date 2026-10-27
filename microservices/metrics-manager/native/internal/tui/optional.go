@@ -48,6 +48,38 @@ func buildOptionalPanels(idx *Index) []OptionalPanel {
 	}
 	appendPanel(temperature)
 
+	bandwidth := OptionalPanel{Title: "DRAM bandwidth"}
+	var bandwidthRows []OptionalRow
+	hasBandwidth := false
+	for _, metric := range []struct{ name, label string }{
+		{"memory_bandwidth_read_mibps", "read"},
+		{"memory_bandwidth_write_mibps", "write"},
+		{"memory_bandwidth_total_mibps", "total"},
+	} {
+		row := OptionalRow{Label: metric.label, Value: "-"}
+		for _, sample := range idx.All(metric.name) {
+			if !math.IsNaN(sample.Value) && !math.IsInf(sample.Value, 0) {
+				row.Value = formatBandwidthMiBps(reading(sample.Value))
+				hasBandwidth = true
+				break
+			}
+		}
+		bandwidthRows = append(bandwidthRows, row)
+	}
+	if hasBandwidth {
+		bandwidth.Rows = bandwidthRows
+	}
+	appendPanel(bandwidth)
+
+	rapl := OptionalPanel{Title: "RAPL power"}
+	for _, sample := range idx.All("rapl_power_power_w") {
+		if domain := sample.Labels["domain"]; domain != "" {
+			addOptionalSample(&rapl, domain, sample, " W")
+		}
+	}
+	sort.Slice(rapl.Rows, func(i, j int) bool { return rapl.Rows[i].Label < rapl.Rows[j].Label })
+	appendPanel(rapl)
+
 	power := OptionalPanel{Title: "DRAM power"}
 	for _, sample := range idx.All("powerstat_package_current_dram_power_consumption_watts") {
 		addOptionalSample(&power, "package "+sample.Labels["package_id"], sample, " W")

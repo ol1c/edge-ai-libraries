@@ -168,7 +168,7 @@ RUN set -eux; \
     mkdir -p /out; \
     go vet ./...; \
     go test ./...; \
-    for plugin in mm-plugin-cpu mm-plugin-gpu mm-plugin-npu mm-plugin-proc mm-plugin-membw; do \
+    for plugin in mm-plugin-cpu mm-plugin-gpu mm-plugin-npu mm-plugin-proc mm-plugin-membw mm-plugin-rapl; do \
         go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
             -o "/out/${plugin}" "./cmd/${plugin}"; \
     done

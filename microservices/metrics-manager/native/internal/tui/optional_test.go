@@ -28,7 +28,7 @@ func TestOptionalPanelsAppearOnlyWithSamples(t *testing.T) {
 		t.Fatalf("baseline unexpectedly has optional panels: %+v", baseline.Optional)
 	}
 	view := renderFixture(t, hostExposition)
-	for _, title := range []string{"Package temperature (100 ms)", "DRAM power", "Per-CPU telemetry",
+	for _, title := range []string{"Package temperature (100 ms)", "DRAM bandwidth", "RAPL power", "DRAM power", "Per-CPU telemetry",
 		"Device interrupts (counters)", "NIC driver enp1s0"} {
 		if strings.Contains(view, title) {
 			t.Errorf("baseline contains opt-in panel %q", title)
@@ -46,6 +46,74 @@ func TestOptionalPanelsAppearOnlyWithSamples(t *testing.T) {
 	}
 	if strings.Contains(view, "99.00 °C") {
 		t.Error("non-package sensor leaked into optional temperature panel")
+	}
+}
+
+func TestRAPLPanelRequiresSamplesAndShowsDomains(t *testing.T) {
+	exposition := hostExposition + `rapl_power_power_w{host="itest",domain="psys"} 9.83
+rapl_power_power_w{host="itest",domain="package-0"} 6.51
+`
+	dashboard := buildFixture(t, exposition)
+	var rows []OptionalRow
+	for _, panel := range dashboard.Optional {
+		if panel.Title == "RAPL power" {
+			rows = panel.Rows
+		}
+	}
+	if want := []OptionalRow{
+		{Label: "package-0", Value: "6.51 W"},
+		{Label: "psys", Value: "9.83 W"},
+	}; !reflect.DeepEqual(rows, want) {
+		t.Errorf("RAPL panel rows = %+v, want %+v", rows, want)
+	}
+	view := renderFixture(t, exposition)
+	wantContains(t, view, "RAPL power")
+	wantContains(t, view, "psys")
+}
+
+func TestDRAMBandwidthPanelRequiresSamplesAndShowsAllFields(t *testing.T) {
+	baseline := buildFixture(t, hostExposition)
+	for _, panel := range baseline.Optional {
+		if panel.Title == "DRAM bandwidth" {
+			t.Fatal("DRAM bandwidth panel visible without samples")
+		}
+	}
+
+	exposition := hostExposition + `memory_bandwidth_read_mibps{host="itest"} 2048
+memory_bandwidth_write_mibps{host="itest"} 128
+memory_bandwidth_total_mibps{host="itest"} 2176
+`
+	dash := buildFixture(t, exposition)
+	var bandwidth *OptionalPanel
+	for i := range dash.Optional {
+		if dash.Optional[i].Title == "DRAM bandwidth" {
+			bandwidth = &dash.Optional[i]
+			break
+		}
+	}
+	if bandwidth == nil {
+		t.Fatal("DRAM bandwidth panel missing despite samples")
+	}
+	want := []OptionalRow{
+		{Label: "read", Value: "2.00 GiB/s"},
+		{Label: "write", Value: "128 MiB/s"},
+		{Label: "total", Value: "2.12 GiB/s"},
+	}
+	if !reflect.DeepEqual(bandwidth.Rows, want) {
+		t.Errorf("DRAM bandwidth rows = %+v, want %+v", bandwidth.Rows, want)
+	}
+	wantContains(t, renderFixture(t, exposition), "DRAM bandwidth")
+
+	partial := buildFixture(t, "memory_bandwidth_write_mibps 0\n")
+	if len(partial.Optional) != 1 || partial.Optional[0].Title != "DRAM bandwidth" {
+		t.Fatalf("partial bandwidth panels = %+v", partial.Optional)
+	}
+	if want := []OptionalRow{
+		{Label: "read", Value: "-"},
+		{Label: "write", Value: "0 MiB/s"},
+		{Label: "total", Value: "-"},
+	}; !reflect.DeepEqual(partial.Optional[0].Rows, want) {
+		t.Errorf("partial bandwidth rows = %+v, want %+v", partial.Optional[0].Rows, want)
 	}
 }
 

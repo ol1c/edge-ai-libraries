@@ -21,11 +21,12 @@ mm-tui
 Everything starts at installation and again at boot. The raw readings are at
 `http://127.0.0.1:9273/metrics`.
 
-Additional inputs require manual activation: see
+Additional inputs and the RAPL collector require manual activation: see
 [temperature and basicstats](#enable-inputstemp-and-aggregatorsbasicstats),
 [device interrupts](#enable-inputsinterrupts) and
 [per-CPU powerstat](#enable-inputsintel_powerstat-per-cpu-fields) and
-[turbostat](#enable-inputsturbostat). Each has its own commands and
+[turbostat](#enable-inputsturbostat), and
+[RAPL platform power](#enable-rapl-package-and-platform-power). Each has its own commands and
 verification step below.
 
 ## Building the package
@@ -49,7 +50,8 @@ native/packaging/dist/metrics-manager_<version>_amd64.deb
 ```
 
 While iterating on the dashboard or the packaging, reuse the image instead of
-rebuilding it every time:
+rebuilding it every time (but rebuild after changing a collector or adding
+`mm-plugin-rapl`, since the plugin binaries are copied from the image):
 
 ```bash
 SKIP_IMAGE_BUILD=1 ./native/build.sh
@@ -72,7 +74,7 @@ sudo apt install ./native/packaging/dist/metrics-manager_*_amd64.deb
 ```
 
 Installation creates the service account, loads the `msr` module, and starts
-everything. Give it a few seconds, then check all six services came up:
+everything. Give it a few seconds, then check the services came up:
 
 ```bash
 systemctl list-units 'metrics-manager-*' --no-legend
@@ -104,10 +106,11 @@ mm-tui
 
 The quickest way to trust a reading is to make it move.
 
-**Memory bandwidth.** Watch the Memory panel while writing a few gigabytes into
-RAM. It should jump from tens of MiB/s to thousands and settle back. If the
-panel shows `—`, the service may be running but unable to open perf counters;
-see [No memory bandwidth](#when-something-is-missing).
+**Memory bandwidth.** Watch the DRAM bandwidth panel while writing a few
+gigabytes into RAM. Its read, write and total values should jump from tens of
+MiB/s to thousands and settle back. If the panel is absent, the service may be
+running but unable to open perf counters; see
+[No memory bandwidth](#when-something-is-missing).
 
 ```bash
 dd if=/dev/zero of=/dev/shm/mmtest bs=1M count=8000; rm -f /dev/shm/mmtest
@@ -294,10 +297,11 @@ readings stay on screen and the age keeps climbing rather than the panel
 emptying.
 
 CPU and memory panels are always present; GPU appears once qmassa reports a
-device, and NPU on machines that have one. The opt-in panels for high-resolution
-package temperature, DRAM power, per-CPU telemetry, device IRQ counters and
-NIC driver statistics appear only after their collectors emit samples. Merely
-installing the package does not add empty panels. The GPU heading names the
+device, and NPU on machines that have one. RAPL power and DRAM bandwidth
+appear only when their collectors can read the corresponding counters. The
+opt-in panels for high-resolution package temperature, DRAM power, per-CPU
+telemetry, device IRQ counters and NIC driver statistics also require samples.
+Merely installing the package does not add empty panels. The GPU heading names the
 kernel driver, as in `GPU 0 · i915`, because it decides what can be read.
 
 What each panel shows:
@@ -306,10 +310,12 @@ What each panel shows:
 |---|---|
 | Header | CPU model, thread count, kernel release |
 | CPU | Usage, frequency, package temperature and power against TDP, base and per-class turbo ceilings, uncore frequency, idle-state residency, and a row per core class with the evidence for the split |
-| Memory | Used and available, and memory controller throughput |
+| Memory | Used and available RAM |
 | GPU | Power, temperature, memory, engine occupancy, per-tile frequencies and throttle reasons, and the processes using the device |
 | NPU | Utilisation, frequency, power, temperature, bandwidth, memory, tile configuration and PCI power state (`D0`–`D3cold`) when published |
 | Processes | The busiest by CPU and RSS, with OS thread count and owner |
+| DRAM bandwidth | System-wide memory-controller read, write and total throughput (MiB/s); visible only when `mm-plugin-membw` publishes samples |
+| RAPL power | Top-level RAPL domains including `package-0` and `psys` platform power (W), when readable; not the per-component subdomains |
 | Package temperature (100 ms) | Opt-in sample and one-second min/max/mean of package sensors |
 | Per-CPU telemetry / DRAM power | Opt-in table with one row per CPU (`CPU 1`, `CPU 8`, etc.), `frequency` and `temperature` columns (`-` where one reading is missing); DRAM RAPL power where supported |
 | Device interrupts (counters) | Opt-in cumulative `interrupts_total` per numbered device IRQ; use `rate()` for IRQ/s |
@@ -318,8 +324,10 @@ What each panel shows:
 
 These additional panels are in Overview; enabling them does not add new charts
 to Trends or Details. If the extra rows exceed the terminal height, scroll the
-Overview. The Memory panel already supports `memory_bandwidth_*_mibps` when
-`mm-plugin-membw` can read the controller counters.
+Overview. The DRAM bandwidth panel uses `memory_bandwidth_*_mibps` when
+`mm-plugin-membw` can read the controller counters. RAPL power uses
+`rapl_power_power_w{domain="..."}` from the optional `mm-plugin-rapl` service.
+The panel appears only after that service is manually enabled and publishes readings.
 
 The Trends tab retains the most recent five minutes by default. It shows CPU
 utilisation, memory usage, CPU temperature, and utilisation and temperature for
@@ -449,7 +457,7 @@ one across the network means you have deliberately exposed it. See
 
 ## Services and privileges
 
-Six services run, and they deliberately do not share a privilege level. Each
+The services run without sharing a privilege level. Each
 collector holds the smallest privilege that was measured to work, and nothing
 more.
 
@@ -459,6 +467,7 @@ more.
 | `metrics-manager-proc` | `metrics-manager`, no capabilities | Busiest processes; needs to see other processes, not to be privileged |
 | `metrics-manager-npu` | `metrics-manager` + `CAP_DAC_READ_SEARCH` | NPU telemetry is `0440 root:root` in sysfs |
 | `metrics-manager-membw` | `metrics-manager` + `CAP_PERFMON` | Memory controller counters are read through perf |
+| `metrics-manager-rapl` (opt-in) | `metrics-manager` + `CAP_DAC_READ_SEARCH` | Top-level RAPL `energy_uj` counters are typically root-readable only |
 | `metrics-manager-powerstat` | `metrics-manager` + `CAP_SYS_RAWIO`, `CAP_DAC_READ_SEARCH` | Package power, TDP and idle states come from MSRs and RAPL |
 | `metrics-manager-qmassa` | `root` + `CAP_SYS_RAWIO`, `CAP_PERFMON`, `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` | GPU power and temperature come from model-specific registers; client usage requires reading other users' DRM `fdinfo` |
 
@@ -647,6 +656,7 @@ retaining the baseline package-power and C-state readings:
 ```bash
 sudo mv -i /etc/metrics-manager/powerstat.d/extra.conf /etc/metrics-manager/powerstat.d/extra.conf.disabled
 sudo systemctl restart metrics-manager-powerstat.service
+sudo systemctl restart metrics-manager-telegraf.service
 ```
 
 Restart `metrics-manager-powerstat.service`, not
@@ -654,6 +664,34 @@ Restart `metrics-manager-powerstat.service`, not
 *all* powerstat readings instead, run
 `sudo systemctl disable --now metrics-manager-powerstat.service`. Telegraf may
 continue exposing cached samples briefly after the powerstat service stops.
+
+#### Enable RAPL package and platform power
+
+The `mm-plugin-rapl` binary and `metrics-manager-rapl.service` are installed
+but **not started or enabled by default**. Unlike `inputs.turbostat`, RAPL
+runs as its own service because its sysfs energy counters need
+`CAP_DAC_READ_SEARCH`; the unprivileged Telegraf service only receives its
+samples over the existing local collection socket. No `powerstat.d` drop-in
+or Telegraf restart is needed.
+
+```bash
+sudo systemctl enable --now metrics-manager-rapl.service
+curl -fsS http://127.0.0.1:9273/metrics |
+  grep '^rapl_power_power_w'
+```
+
+The TUI shows the RAPL power panel only after a reading arrives. The plugin
+reports top-level domains such as `package-0` and `psys` where available;
+`psys` is platform power, not a DRAM subdomain. To stop collection now and
+keep it disabled after reboot:
+
+```bash
+sudo systemctl disable --now metrics-manager-rapl.service
+```
+
+Previously exposed samples may remain briefly in Telegraf's Prometheus cache.
+If the enabled service publishes nothing, see
+[No RAPL power](#when-something-is-missing).
 
 #### Enable `inputs.turbostat`
 
@@ -685,6 +723,7 @@ To disable the input without removing its settings:
 ```bash
 sudo mv -i /etc/metrics-manager/powerstat.d/turbostat.conf /etc/metrics-manager/powerstat.d/turbostat.conf.disabled
 sudo systemctl restart metrics-manager-powerstat.service
+sudo systemctl restart metrics-manager-telegraf.service
 ```
 
 This leaves the baseline `intel_powerstat` collector running. The endpoint
@@ -1733,6 +1772,27 @@ to tcmi's DRAM read/write/total GB/s after unit conversion.
 
 A machine whose memory controller exposes no free-running counters cannot
 report this at all; the service idles instead of restarting in a loop.
+
+**No RAPL power.** The Go collector reads top-level
+`/sys/class/powercap/intel-rapl:N/energy_uj` (not `:N:M` subdomains) once per
+second and converts energy deltas to watts, correcting counter wrap using
+`max_energy_range_uj`. It reports each available domain as
+`rapl_power_power_w{domain="package-0"}` or
+`rapl_power_power_w{domain="psys"}`; `psys` depends on hardware support.
+Once enabled, `metrics-manager-rapl.service` runs with read-only
+`CAP_DAC_READ_SEARCH` and sends readings to Telegraf's collection socket.
+If it is running but there are no series, check the startup diagnostic and
+the sysfs zones:
+
+```bash
+journalctl -u metrics-manager-rapl.service -n 20 --no-pager
+ls -l /sys/class/powercap/intel-rapl:*/energy_uj
+sudo /usr/libexec/metrics-manager/mm-plugin-rapl -once
+curl -fsS http://127.0.0.1:9273/metrics | grep '^rapl_power_power_w'
+```
+
+The `-once` check only verifies counter readability; it does not change the
+installed service or the host's RAPL permissions.
 
 **No process list.** `metrics-manager-proc` needs no privileges, but it does
 need to see other processes. Hardening it with `ProtectProc=invisible`, or

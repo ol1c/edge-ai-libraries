@@ -608,15 +608,6 @@ func (m Model) memorySection() string {
 	b.WriteString(field("used", used))
 	b.WriteString(field("available", formatPercent(mem.AvailablePercent)))
 
-	// Bandwidth is omitted rather than dashed out when the collector is not
-	// running, because on many machines it simply cannot be read.
-	if mem.TotalMiBps.OK {
-		b.WriteString(field("bandwidth", fmt.Sprintf("%s   read %s   write %s",
-			formatBandwidthMiBps(mem.TotalMiBps),
-			formatBandwidthMiBps(mem.ReadMiBps),
-			formatBandwidthMiBps(mem.WriteMiBps))))
-	}
-
 	return b.String()
 }
 

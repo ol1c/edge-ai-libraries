@@ -35,12 +35,16 @@ Everything starts at installation and again at boot. The raw readings are at
 
 ## Services and privileges
 
-Three services run, and they deliberately do not share a privilege level.
+The services run without sharing a privilege level.
 
 | Service | Runs as | Why |
 |---|---|---|
 | `metrics-manager-telegraf` | `metrics-manager`, no capabilities | Collects unprivileged metrics, publishes the endpoint |
 | `metrics-manager-npu` | `metrics-manager` + `CAP_DAC_READ_SEARCH` | NPU telemetry is `0440 root:root` in sysfs |
+| `metrics-manager-proc` | `metrics-manager`, no capabilities | Busiest processes |
+| `metrics-manager-membw` | `metrics-manager` + `CAP_PERFMON` | Memory controller counters through perf |
+| `metrics-manager-rapl` (opt-in) | `metrics-manager` + `CAP_DAC_READ_SEARCH` | Reads top-level RAPL energy counters for package and platform power |
+| `metrics-manager-powerstat` | `metrics-manager` + `CAP_SYS_RAWIO`, `CAP_DAC_READ_SEARCH` | Package power and idle states |
 | `metrics-manager-qmassa` | `root` | GPU power and temperature come from model-specific registers |
 
 Telegraf is the component with an attack surface: it listens on two loopback
@@ -126,6 +130,17 @@ or C-state series. On a host with a readable DRAM RAPL subzone, edit
 powerstat service. Do not enable this on hosts without that subzone: Telegraf
 logs a collection error on every interval. Changes to the main powerstat
 configuration remain independent of this optional drop-in.
+
+For opt-in RAPL package and platform (`psys`) power, start the separately
+packaged collector; it does not require a Telegraf drop-in:
+
+```bash
+sudo systemctl enable --now metrics-manager-rapl.service
+curl -fsS http://127.0.0.1:9273/metrics | grep '^rapl_power_power_w'
+```
+
+Use `sudo systemctl disable --now metrics-manager-rapl.service` to stop it
+and keep it off after reboot. Its TUI panel appears only after samples arrive.
 
 For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
 binary matching the running kernel and verify `turbostat --help` succeeds.

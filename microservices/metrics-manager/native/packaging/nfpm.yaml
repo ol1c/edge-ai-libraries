@@ -72,6 +72,10 @@ contents:
     dst: /usr/libexec/metrics-manager/mm-plugin-membw
     file_info: { mode: 0755 }
 
+  - src: dist/bin/mm-plugin-rapl
+    dst: /usr/libexec/metrics-manager/mm-plugin-rapl
+    file_info: { mode: 0755 }
+
   # The dashboard is the one thing a person runs, so it goes in the path.
   - src: dist/bin/mm-tui
     dst: /usr/bin/mm-tui
@@ -150,6 +154,10 @@ contents:
 
   - src: systemd/metrics-manager-membw.service
     dst: /usr/lib/systemd/system/metrics-manager-membw.service
+    file_info: { mode: 0644 }
+
+  - src: systemd/metrics-manager-rapl.service
+    dst: /usr/lib/systemd/system/metrics-manager-rapl.service
     file_info: { mode: 0644 }
 
   # Creates the runtime directory and the FIFO with ownership that lets root

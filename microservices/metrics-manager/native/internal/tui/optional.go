@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/open-edge-platform/edge-ai-libraries/microservices/metrics-manager/native/internal/promtext"
@@ -14,8 +15,10 @@ import (
 
 // OptionalPanel is built only when an opt-in collector actually publishes data.
 type OptionalPanel struct {
-	Title string
-	Rows  []OptionalRow
+	Title        string
+	Rows         []OptionalRow
+	TableColumns []column
+	TableRows    [][]string
 }
 
 type OptionalRow struct {
@@ -25,7 +28,7 @@ type OptionalRow struct {
 func buildOptionalPanels(idx *Index) []OptionalPanel {
 	var panels []OptionalPanel
 	appendPanel := func(panel OptionalPanel) {
-		if len(panel.Rows) > 0 {
+		if len(panel.Rows) > 0 || len(panel.TableRows) > 0 {
 			panels = append(panels, panel)
 		}
 	}
@@ -51,16 +54,7 @@ func buildOptionalPanels(idx *Index) []OptionalPanel {
 	}
 	appendPanel(power)
 
-	cores := OptionalPanel{Title: "Per-CPU telemetry"}
-	for _, metric := range []struct{ name, label, unit string }{
-		{"powerstat_core_cpu_frequency_mhz", "frequency", " MHz"},
-		{"powerstat_core_cpu_temperature_celsius", "temperature", " °C"},
-	} {
-		for _, sample := range idx.All(metric.name) {
-			addOptionalSample(&cores, "CPU "+sample.Labels["cpu_id"]+" "+metric.label, sample, metric.unit)
-		}
-	}
-	appendPanel(cores)
+	appendPanel(buildPerCPUPanel(idx))
 
 	interrupts := OptionalPanel{Title: "Device interrupts (counters)"}
 	for _, sample := range idx.All("interrupts_total") {
@@ -104,7 +98,93 @@ func buildOptionalPanels(idx *Index) []OptionalPanel {
 		appendPanel(*interfaces[key])
 	}
 
+	turbostat := OptionalPanel{Title: "Turbostat"}
+	for _, metric := range []struct{ name, label, unit string }{
+		{"turbostat_ipc", "IPC", ""},
+		{"turbostat_smi", "SMI", ""},
+		{"turbostat_irq", "IRQ", ""},
+		{"turbostat_nmi", "NMI", ""},
+		{"turbostat_busy_percent", "busy", " %"},
+		{"turbostat_busy_frequency_mhz", "busy frequency", " MHz"},
+		{"turbostat_core_temperature_celsius", "core temperature", " °C"},
+	} {
+		for _, sample := range idx.All(metric.name) {
+			place := "system"
+			if cpu := sample.Labels["cpu"]; cpu != "" && cpu != "-" {
+				place = "CPU " + cpu
+			} else if core := sample.Labels["core"]; core != "" && core != "-" {
+				place = "core " + core
+			}
+			addOptionalSample(&turbostat, metric.label+" "+place, sample, metric.unit)
+		}
+	}
+	appendPanel(turbostat)
+
 	return panels
+}
+
+func buildPerCPUPanel(idx *Index) OptionalPanel {
+	panel := OptionalPanel{
+		Title: "Per-CPU telemetry",
+		TableColumns: []column{
+			{title: "CPU", width: 10, left: true},
+			{title: "frequency", width: 18},
+			{title: "temperature", width: 16},
+		},
+	}
+	type readings struct {
+		frequency, temperature Reading
+	}
+	cpus := make(map[string]*readings)
+	for _, metric := range []struct {
+		name        string
+		temperature bool
+	}{
+		{"powerstat_core_cpu_frequency_mhz", false},
+		{"powerstat_core_cpu_temperature_celsius", true},
+	} {
+		for _, sample := range idx.All(metric.name) {
+			id := sample.Labels["cpu_id"]
+			if id == "" || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				continue
+			}
+			cpu := cpus[id]
+			if cpu == nil {
+				cpu = &readings{}
+				cpus[id] = cpu
+			}
+			if metric.temperature {
+				cpu.temperature = reading(sample.Value)
+			} else {
+				cpu.frequency = reading(sample.Value)
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(cpus))
+	for id := range cpus {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, aErr := strconv.Atoi(ids[i])
+		b, bErr := strconv.Atoi(ids[j])
+		if aErr == nil && bErr == nil && a != b {
+			return a < b
+		}
+		return ids[i] < ids[j]
+	})
+	for _, id := range ids {
+		cpu := cpus[id]
+		frequency, temperature := "-", "-"
+		if cpu.frequency.OK {
+			frequency = fmt.Sprintf("%.2f MHz", cpu.frequency.Value)
+		}
+		if cpu.temperature.OK {
+			temperature = fmt.Sprintf("%.2f °C", cpu.temperature.Value)
+		}
+		panel.TableRows = append(panel.TableRows, []string{"CPU " + sanitize(id, 20), frequency, temperature})
+	}
+	return panel
 }
 
 func addOptionalSample(panel *OptionalPanel, label string, sample promtext.Sample, unit string) {
@@ -117,9 +197,12 @@ func addOptionalSample(panel *OptionalPanel, label string, sample promtext.Sampl
 	})
 }
 
-func optionalSection(panel OptionalPanel) string {
+func (m Model) optionalSection(panel OptionalPanel) string {
 	var b strings.Builder
 	b.WriteString(headingStyle.Render(sanitize(panel.Title, 100)) + "\n")
+	if len(panel.TableRows) > 0 {
+		b.WriteString(responsiveTable(panel.TableColumns, panel.TableRows, m.panelWidth()))
+	}
 	for _, row := range panel.Rows {
 		b.WriteString(field(sanitize(row.Label, 60), row.Value))
 	}

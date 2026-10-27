@@ -323,6 +323,7 @@ type NPU struct {
 	BandwidthMBps Reading
 	TileConfig    Reading
 	MemoryMB      Reading
+	PowerState    Reading
 
 	// MaxFrequencyMHz is the ceiling the driver reports, which is what
 	// makes the current frequency mean anything.
@@ -901,6 +902,7 @@ func buildNPU(idx *Index) NPU {
 		BandwidthMBps: idx.Value("npu_bandwidth", nil),
 		TileConfig:    idx.Value("npu_tile_config", nil),
 		MemoryMB:      npuMemory(idx),
+		PowerState:    idx.Value("npu_power_state", nil),
 		// A ceiling of zero would be as meaningless here as it is for the
 		// CPU, so the same guard applies.
 		MaxFrequencyMHz: statedLimit(idx.Value("npu_frequency_max_mhz", nil)),

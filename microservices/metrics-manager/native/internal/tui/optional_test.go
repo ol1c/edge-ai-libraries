@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestOptionalPanelsAppearOnlyWithSamples(t *testing.T) {
 	view = renderFixture(t, hostExposition+optionalExposition)
 	for _, want := range []string{
 		"Package temperature (100 ms)", "54.00 °C", "DRAM power", "1.50 W",
-		"Per-CPU telemetry", "CPU 0 frequency", "2000.00 MHz",
+		"Per-CPU telemetry", "frequency", "temperature", "CPU 0", "2000.00 MHz", "52.00 °C",
 		"Device interrupts (counters)", "IRQ 42 nvme0q1", "1234.00",
 		"NIC driver enp1s0", "rx_errors",
 	} {
@@ -45,4 +46,56 @@ func TestOptionalPanelsAppearOnlyWithSamples(t *testing.T) {
 	if strings.Contains(view, "99.00 °C") {
 		t.Error("non-package sensor leaked into optional temperature panel")
 	}
+}
+
+func TestPerCPUTelemetryRowsKeepMissingValuesInTheirColumns(t *testing.T) {
+	view := renderFixture(t, `powerstat_core_cpu_frequency_mhz{cpu_id="10"} 2000
+powerstat_core_cpu_temperature_celsius{cpu_id="8"} 42
+powerstat_core_cpu_frequency_mhz{cpu_id="1"} 0
+powerstat_core_cpu_temperature_celsius{cpu_id="1"} 51
+`)
+
+	patterns := []string{
+		`CPU 1\s+0\.00 MHz\s+51\.00 °C`,
+		`CPU 8\s+-\s+42\.00 °C`,
+		`CPU 10\s+2000\.00 MHz\s+-`,
+	}
+	previous := -1
+	for _, pattern := range patterns {
+		location := regexp.MustCompile(pattern).FindStringIndex(view)
+		if location == nil {
+			t.Errorf("missing CPU row matching %q", pattern)
+			continue
+		}
+		if location[0] <= previous {
+			t.Errorf("CPU rows not sorted numerically: %q", pattern)
+		}
+		previous = location[0]
+	}
+}
+
+func TestTurbostatPanelRequiresSamples(t *testing.T) {
+	baseline := renderFixture(t, hostExposition)
+	if strings.Contains(baseline, "Turbostat") {
+		t.Fatal("turbostat panel is visible without samples")
+	}
+
+	view := renderFixture(t, hostExposition+`turbostat_ipc{host="itest",core="0",cpu="8"} 1.24
+turbostat_smi{host="itest",core="-",cpu="-"} 3
+`)
+	wantContains(t, view, "Turbostat")
+	wantContains(t, view, "IPC CPU 8")
+	wantContains(t, view, "SMI system")
+}
+
+func TestNPUPowerStateInPanel(t *testing.T) {
+	baseline := renderFixture(t, acceleratorExposition)
+	if strings.Contains(baseline, "power state") {
+		t.Fatal("NPU power state is visible before a collector publishes it")
+	}
+	view := renderFixture(t, acceleratorExposition+"npu_power_state{host=\"itest\"} 3\n")
+	wantContains(t, view, "power state")
+	wantContains(t, view, "D3hot")
+	view = renderFixture(t, acceleratorExposition+"npu_power_state{host=\"itest\"} -1\n")
+	wantContains(t, view, "unknown")
 }

@@ -221,7 +221,7 @@ func (m Model) panelGrid(width int) string {
 		})
 	}
 	for _, panel := range m.dash.Optional {
-		auxiliary = append(auxiliary, func(Model) string { return optionalSection(panel) })
+		auxiliary = append(auxiliary, func(m Model) string { return m.optionalSection(panel) })
 	}
 	for _, render := range auxiliary {
 		shortest := 0
@@ -843,8 +843,28 @@ func (m Model) npuSection() string {
 	b.WriteString(field("bandwidth", formatBandwidth(npu.BandwidthMBps)))
 	b.WriteString(field("memory", formatMegabytes(npu.MemoryMB)))
 	b.WriteString(field("tile config", formatCount(npu.TileConfig)))
+	if npu.PowerState.OK {
+		b.WriteString(field("power state", npuPowerState(npu.PowerState)))
+	}
 
 	return b.String()
+}
+
+func npuPowerState(state Reading) string {
+	switch state.Value {
+	case 0:
+		return "D0"
+	case 1:
+		return "D1"
+	case 2:
+		return "D2"
+	case 3:
+		return "D3hot"
+	case 4:
+		return "D3cold"
+	default:
+		return "unknown"
+	}
 }
 
 // column describes one table column. Padding is applied to the plain text

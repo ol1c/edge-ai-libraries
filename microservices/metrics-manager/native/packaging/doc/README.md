@@ -86,6 +86,15 @@ Optional collectors are shipped as examples, not enabled by installation.
 Install only those needed on this machine (do not overwrite an existing,
 locally edited drop-in):
 
+First make sure the current package is installed with
+`dpkg-query -W metrics-manager`, then check the desired example exists under
+`/usr/share/doc/metrics-manager/examples/`. If `dpkg-query` reports no
+package or the example or service unit is missing, build and install the
+current `.deb` from `native/packaging/dist/` before running the commands below.
+Building the package alone does not install its examples or systemd units;
+installation starts the Metrics Manager services. A reused version number
+does not guarantee an older installation has these newer files.
+
 ```bash
 sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-network.conf /etc/metrics-manager/telegraf.d/network.conf
 sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-temperature.conf /etc/metrics-manager/telegraf.d/temperature.conf
@@ -117,6 +126,22 @@ or C-state series. On a host with a readable DRAM RAPL subzone, edit
 powerstat service. Do not enable this on hosts without that subzone: Telegraf
 logs a collection error on every interval. Changes to the main powerstat
 configuration remain independent of this optional drop-in.
+
+For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
+binary matching the running kernel and verify `turbostat --help` succeeds.
+Turbostat reads CPU MSRs, so its example belongs in the **privileged**
+powerstat directory:
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-turbostat.conf /etc/metrics-manager/powerstat.d/turbostat.conf
+sudo systemctl restart metrics-manager-powerstat.service
+curl -fsS http://127.0.0.1:9273/metrics | grep -E '^turbostat_(ipc|smi)'
+```
+
+Rename `turbostat.conf` to `turbostat.conf.disabled` and restart
+`metrics-manager-powerstat.service` to disable it without stopping baseline
+powerstat collection. The NPU collector now also exports `npu_power_state`:
+`0`–`4` mean `D0`–`D3cold`; `-1` means unavailable or unknown.
 
 ```bash
 sudo systemctl restart 'metrics-manager-*.service'

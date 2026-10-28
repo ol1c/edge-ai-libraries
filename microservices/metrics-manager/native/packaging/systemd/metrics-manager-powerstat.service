@@ -16,7 +16,8 @@ Group=metrics-manager
 EnvironmentFile=/etc/metrics-manager/metrics-manager.env
 
 ExecStart=/usr/libexec/metrics-manager/telegraf \
-    --config /etc/metrics-manager/telegraf-powerstat.conf
+    --config /etc/metrics-manager/telegraf-powerstat.conf \
+    --config-directory /etc/metrics-manager/powerstat.d
 
 Restart=on-failure
 RestartSec=5s

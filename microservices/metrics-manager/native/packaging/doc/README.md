@@ -26,7 +26,7 @@ Everything starts at installation and again at boot. The raw readings are at
 | Path | Contents |
 |---|---|
 | `/usr/bin/mm-tui` | Terminal dashboard |
-| `/usr/libexec/metrics-manager/` | Telegraf, qmassa and the three collector plugins |
+| `/usr/libexec/metrics-manager/` | Telegraf, qmassa and the collector plugins |
 | `/etc/metrics-manager/telegraf.conf` | Collection and publishing configuration |
 | `/etc/metrics-manager/metrics-manager.env` | Settings shared by every service |
 | `/etc/metrics-manager/telegraf.d/` | Drop-in directory for local configuration |
@@ -35,12 +35,16 @@ Everything starts at installation and again at boot. The raw readings are at
 
 ## Services and privileges
 
-Three services run, and they deliberately do not share a privilege level.
+The services run without sharing a privilege level.
 
 | Service | Runs as | Why |
 |---|---|---|
 | `metrics-manager-telegraf` | `metrics-manager`, no capabilities | Collects unprivileged metrics, publishes the endpoint |
 | `metrics-manager-npu` | `metrics-manager` + `CAP_DAC_READ_SEARCH` | NPU telemetry is `0440 root:root` in sysfs |
+| `metrics-manager-proc` | `metrics-manager`, no capabilities | Busiest processes |
+| `metrics-manager-membw` | `metrics-manager` + `CAP_PERFMON` | Memory controller counters through perf |
+| `metrics-manager-rapl` (opt-in) | `metrics-manager` + `CAP_DAC_READ_SEARCH` | Reads top-level RAPL energy counters for package and platform power |
+| `metrics-manager-powerstat` | `metrics-manager` + `CAP_SYS_RAWIO`, `CAP_DAC_READ_SEARCH` | Package power and idle states |
 | `metrics-manager-qmassa` | `root` | GPU power and temperature come from model-specific registers |
 
 Telegraf is the component with an attack surface: it listens on two loopback
@@ -81,6 +85,78 @@ sampling interval. Telegraf itself is configured by
 `/etc/metrics-manager/telegraf.conf`, with local additions in
 `/etc/metrics-manager/telegraf.d/*.conf`, which is read afterwards and left
 alone by upgrades.
+
+Optional collectors are shipped as examples, not enabled by installation.
+Install only those needed on this machine (do not overwrite an existing,
+locally edited drop-in):
+
+First make sure the current package is installed with
+`dpkg-query -W metrics-manager`, then check the desired example exists under
+`/usr/share/doc/metrics-manager/examples/`. If `dpkg-query` reports no
+package or the example or service unit is missing, build and install the
+current `.deb` from `native/packaging/dist/` before running the commands below.
+Building the package alone does not install its examples or systemd units;
+installation starts the Metrics Manager services. A reused version number
+does not guarantee an older installation has these newer files.
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-network.conf /etc/metrics-manager/telegraf.d/network.conf
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-temperature.conf /etc/metrics-manager/telegraf.d/temperature.conf
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-interrupts.conf /etc/metrics-manager/telegraf.d/interrupts.conf
+sudo systemctl restart metrics-manager-telegraf.service
+```
+
+The network example enables both `net` and `ethtool`. Temperature adds 100 ms
+package samples and one-second min/max/mean alongside the existing one-second
+reading; interrupts adds numbered device IRQ counters. `ethtool` fields depend
+on the NIC driver. If `network.conf` is already installed, add the
+`[[inputs.ethtool]]` block from the updated example to that file rather than
+reinstalling it and losing your interface selection. Each corresponding TUI
+panel appears only after its metrics reach the endpoint. Remove an example
+from `telegraf.d` and restart the service to disable it.
+
+Extra per-CPU powerstat measurements need the **privileged** Telegraf instance,
+not the regular `telegraf.d` directory:
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-powerstat-extra.conf /etc/metrics-manager/powerstat.d/extra.conf
+sudo systemctl restart metrics-manager-powerstat.service
+```
+
+This adds per-CPU frequency and temperature without duplicating package power
+or C-state series. On a host with a readable DRAM RAPL subzone, edit
+`/etc/metrics-manager/powerstat.d/extra.conf` to set
+`package_metrics = ["current_dram_power_consumption"]`, then restart the
+powerstat service. Do not enable this on hosts without that subzone: Telegraf
+logs a collection error on every interval. Changes to the main powerstat
+configuration remain independent of this optional drop-in.
+
+For opt-in RAPL package and platform (`psys`) power, start the separately
+packaged collector; it does not require a Telegraf drop-in:
+
+```bash
+sudo systemctl enable --now metrics-manager-rapl.service
+curl -fsS http://127.0.0.1:9273/metrics | grep '^rapl_power_power_w'
+```
+
+Use `sudo systemctl disable --now metrics-manager-rapl.service` to stop it
+and keep it off after reboot. Its TUI panel appears only after samples arrive.
+
+For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
+binary matching the running kernel and verify `turbostat --help` succeeds.
+Turbostat reads CPU MSRs, so its example belongs in the **privileged**
+powerstat directory:
+
+```bash
+sudo install -o root -g root -m 0644 /usr/share/doc/metrics-manager/examples/telegraf-turbostat.conf /etc/metrics-manager/powerstat.d/turbostat.conf
+sudo systemctl restart metrics-manager-powerstat.service
+curl -fsS http://127.0.0.1:9273/metrics | grep -E '^turbostat_(ipc|smi)'
+```
+
+Rename `turbostat.conf` to `turbostat.conf.disabled` and restart
+`metrics-manager-powerstat.service` to disable it without stopping baseline
+powerstat collection. The NPU collector now also exports `npu_power_state`:
+`0`–`4` mean `D0`–`D3cold`; `-1` means unavailable or unknown.
 
 ```bash
 sudo systemctl restart 'metrics-manager-*.service'
@@ -194,6 +270,19 @@ sudo -u metrics-manager /usr/libexec/metrics-manager/mm-plugin-npu -once
 
 Run under `sudo` that will fail on the permissions — that is the expected way
 to tell an absent NPU from a permissions problem.
+
+**No memory bandwidth.** `mm-plugin-membw` reports system-wide DRAM read,
+write and total throughput in MiB/s (not GPU-only bandwidth). Check
+`journalctl -u metrics-manager-membw.service` and
+`cat /proc/sys/kernel/perf_event_paranoid`. On kernels that set this value to
+4, `CAP_PERFMON` alone may be refused for uncore events; the service will stay
+running but idle with a `permission denied` diagnostic. A root diagnostic
+`sudo /usr/libexec/metrics-manager/mm-plugin-membw -once` can confirm that
+the counters themselves work.
+An administrator may choose a less restrictive perf policy, after assessing
+the information-exposure implications; do not grant the service broad
+`CAP_SYS_ADMIN` merely to make the reading appear. Restart the membw service
+after changing host perf policy so it can reopen the counters.
 
 **Nothing at all, and Telegraf will not start.** A stale socket is the usual
 cause after an unclean shutdown; the unit clears it on start, so a restart is

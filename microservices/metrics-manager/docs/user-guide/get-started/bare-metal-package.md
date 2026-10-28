@@ -647,7 +647,7 @@ Command failures are reported and stop the script; changes already applied
 are not rolled back.
 
 Hardware and kernel prerequisites still apply. In particular, install matching
-Turbostat tools first (the script checks `/usr/bin/turbostat --help`), and review
+Turbostat tools first (the script checks `/usr/bin/turbostat --version`), and review
 Network interface and Storage mount/device selection as described below.
 Verify actual metrics at the endpoint; enabling a collector does not guarantee
 hardware support or immediate removal of cached samples.
@@ -767,10 +767,12 @@ because it reads CPU MSRs; do not copy this example into `telegraf.d`. It needs
 `/usr/bin/turbostat` backed by tools for the *running kernel*. A wrapper
 present in `/usr/bin` is not sufficient if it reports that no matching binary
 exists. On Debian/Ubuntu, install the matching `linux-tools-$(uname -r)`
-package if available, then verify `turbostat --help` works before enabling:
+package if available, then verify `turbostat --version` succeeds before enabling.
+Use `--version` for this check: some versions return a nonzero exit status for
+`--help` even when the binary works.
 
 ```bash
-turbostat --help
+turbostat --version
 sudo install -o root -g root -m 0644 \
   /usr/share/doc/metrics-manager/examples/telegraf-turbostat.conf \
   /etc/metrics-manager/powerstat.d/turbostat.conf

@@ -93,6 +93,31 @@ for key in POWERSTAT_EXTRA TEMPERATURE INTERRUPTS NETWORK STORAGE; do
     [[ ! -e "${destinations[$key]}.disabled" ]] || fail "Disabled file not restored"
 done
 
+# Turbostat can return 1 for help despite being installed and functional.
+cat > "$WORK/bin/turbostat" <<'EOF'
+#!/bin/sh
+case "$1" in
+    --help) echo 'Usage: turbostat [OPTIONS]' >&2; exit 1 ;;
+    --version) echo 'turbostat version 2026.01.01' >&2 ;;
+    *) exit 99 ;;
+esac
+EOF
+chmod +x "$WORK/bin/turbostat"
+check_turbostat "$WORK/bin/turbostat" > "$WORK/stdout" 2> "$WORK/stderr"
+[[ ! -s "$WORK/stdout" && ! -s "$WORK/stderr" ]] || fail "Version probe was not quiet"
+
+printf '#!/bin/sh\necho "WARNING: turbostat not found for kernel test" >&2\nexit 2\n' > "$WORK/bin/turbostat"
+if (check_turbostat "$WORK/bin/turbostat") > "$WORK/stdout" 2> "$WORK/stderr"; then
+    fail "Missing kernel tools were ignored"
+fi
+grep -Fq 'Cannot run' "$WORK/stderr" || fail "Missing actionable Turbostat error"
+grep -Fq 'WARNING: turbostat not found for kernel test' "$WORK/stderr" ||
+    fail "Original Turbostat diagnostic was lost"
+if (check_turbostat "$WORK/bin/missing-turbostat") > "$WORK/stdout" 2> "$WORK/stderr"; then
+    fail "Missing Turbostat executable was ignored"
+fi
+grep -Fq 'before enabling Turbostat' "$WORK/stderr" || fail "Missing executable diagnostic"
+
 # Test Turbostat's drop-in mapping without requiring host MSR tools.
 printf 'turbostat example\n' > "${examples[TURBOSTAT]}"
 settings[TURBOSTAT]=true

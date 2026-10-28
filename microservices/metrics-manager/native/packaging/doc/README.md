@@ -143,7 +143,8 @@ Use `sudo systemctl disable --now metrics-manager-rapl.service` to stop it
 and keep it off after reboot. Its TUI panel appears only after samples arrive.
 
 For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
-binary matching the running kernel and verify `turbostat --help` succeeds.
+binary matching the running kernel and verify `turbostat --version` succeeds
+(`--help` can return a nonzero exit status even when the binary works).
 Turbostat reads CPU MSRs, so its example belongs in the **privileged**
 powerstat directory:
 

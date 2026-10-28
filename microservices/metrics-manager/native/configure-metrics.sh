@@ -62,6 +62,17 @@ prepare_paths() {
     examples[TURBOSTAT]="$EXAMPLES_DIR/telegraf-turbostat.conf"
 }
 
+check_turbostat() {
+    local binary=${1:-/usr/bin/turbostat} output
+    [[ -x "$binary" ]] ||
+        fail "Install $binary for the running kernel before enabling Turbostat"
+    # Some versions print help to stderr and exit with status 1.
+    if ! output=$("$binary" --version 2>&1); then
+        fail "Cannot run $binary --version; install Turbostat tools matching the running kernel:
+$output"
+    fi
+}
+
 preflight() {
     local key destination
     command -v systemctl >/dev/null || fail "systemctl is required"
@@ -86,9 +97,7 @@ preflight() {
         esac
     done
     if [[ "${settings[TURBOSTAT]}" == true ]]; then
-        [[ -x /usr/bin/turbostat ]] ||
-            fail "Install /usr/bin/turbostat for the running kernel before enabling Turbostat"
-        /usr/bin/turbostat --help >/dev/null
+        check_turbostat
     fi
 }
 

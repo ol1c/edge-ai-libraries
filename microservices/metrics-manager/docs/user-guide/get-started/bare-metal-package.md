@@ -602,6 +602,56 @@ sudo apt install ./native/packaging/dist/metrics-manager_*_amd64.deb
 An older package with the same version string may lack newly added examples;
 verify the installed files, not only the version.
 
+#### Configure optional telemetry with a script
+
+From the source checkout, edit
+[`native/metrics-options.conf`](../../../native/metrics-options.conf), then run:
+
+```bash
+./native/configure-metrics.sh
+# Or use a separate options file:
+./native/configure-metrics.sh /path/to/metrics-options.conf
+```
+
+The Bash script uses `sudo` when not already running as root and requires the
+installed package described above. It reads assignments as data, not shell
+commands. Each option accepts `true` (enable), `false` (disable), or `auto`
+(leave its current configuration and enablement unchanged). All options default
+to `auto`; omitted options also remain unchanged. Unknown keys, duplicate keys
+and invalid values are rejected before applying any changes.
+
+| Option | Controls |
+| ------ | -------- |
+| `ENABLE_RAPL` | `metrics-manager-rapl.service` |
+| `ENABLE_POWERSTAT_EXTRA` | Per-CPU powerstat fields in `powerstat.d/extra.conf` |
+| `ENABLE_TURBOSTAT` | `powerstat.d/turbostat.conf` |
+| `ENABLE_TEMPERATURE` | `telegraf.d/temperature.conf`, including basicstats |
+| `ENABLE_INTERRUPTS` | `telegraf.d/interrupts.conf` |
+| `ENABLE_NETWORK` | `telegraf.d/network.conf`, including ethtool |
+| `ENABLE_STORAGE` | `telegraf.d/storage.conf` |
+
+For example, set `ENABLE_RAPL=true` and `ENABLE_POWERSTAT_EXTRA=true` to enable
+both, or set either to `false` to disable it. RAPL uses `systemctl enable --now`
+or `disable --now`. Drop-ins are installed from the packaged examples only
+when no local configuration exists. Existing active files are preserved;
+disabled files are restored on enable. Disabling renames a drop-in to
+`.conf.disabled`, retaining local settings. If both files already exist,
+disabling fails rather than overwriting either file.
+
+Finally, the script runs `systemctl try-restart 'metrics-manager-*.service'`
+to reload all running Metrics Manager services. Unlike plain `restart`, this
+does not start stopped services, including a RAPL service just disabled by
+`ENABLE_RAPL=false`. It also does not enable a stopped baseline collector:
+powerstat drop-ins require `metrics-manager-powerstat.service` to be running.
+Command failures are reported and stop the script; changes already applied
+are not rolled back.
+
+Hardware and kernel prerequisites still apply. In particular, install matching
+Turbostat tools first (the script checks `/usr/bin/turbostat --version`), and review
+Network interface and Storage mount/device selection as described below.
+Verify actual metrics at the endpoint; enabling a collector does not guarantee
+hardware support or immediate removal of cached samples.
+
 #### Enable `inputs.temp` and `aggregators.basicstats`
 
 For 100 ms CPU package samples and one-second min/max/mean, run:
@@ -717,10 +767,12 @@ because it reads CPU MSRs; do not copy this example into `telegraf.d`. It needs
 `/usr/bin/turbostat` backed by tools for the *running kernel*. A wrapper
 present in `/usr/bin` is not sufficient if it reports that no matching binary
 exists. On Debian/Ubuntu, install the matching `linux-tools-$(uname -r)`
-package if available, then verify `turbostat --help` works before enabling:
+package if available, then verify `turbostat --version` succeeds before enabling.
+Use `--version` for this check: some versions return a nonzero exit status for
+`--help` even when the binary works.
 
 ```bash
-turbostat --help
+turbostat --version
 sudo install -o root -g root -m 0644 \
   /usr/share/doc/metrics-manager/examples/telegraf-turbostat.conf \
   /etc/metrics-manager/powerstat.d/turbostat.conf

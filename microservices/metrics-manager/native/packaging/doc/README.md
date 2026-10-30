@@ -80,11 +80,48 @@ authentication in front of either one before exposing it off the host.
 ## Configuration
 
 Settings shared by every service live in
-`/etc/metrics-manager/metrics-manager.env` — the `host` tag and the qmassa
-sampling interval. Telegraf itself is configured by
+`/etc/metrics-manager/metrics-manager.env` — the `host` tag, Turbostat executable
+and sampling interval, qmassa sampling interval and process limit. Telegraf itself is configured by
 `/etc/metrics-manager/telegraf.conf`, with local additions in
 `/etc/metrics-manager/telegraf.d/*.conf`, which is read afterwards and left
 alone by upgrades.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TURBOSTAT_INTERVAL` | `5` | Positive integer seconds between Turbostat samples |
+| `TURBOSTAT_BIN` | `/usr/bin/turbostat` | Absolute host path, normally the distribution's kernel-selecting wrapper |
+| `METRICS_MANAGER_HOSTNAME` | empty (kernel hostname) | Stable `host=` tag for all collectors |
+
+From a source checkout, set these in `native/metrics-options.conf` and run
+`native/configure-metrics.sh`, or pass a separate options file to that script:
+
+```ini
+TURBOSTAT_INTERVAL=2
+TURBOSTAT_BIN=/usr/local/bin/turbostat
+METRICS_MANAGER_HOSTNAME=lab-node-42
+```
+
+The helper persists selected values in the shared environment file before
+restarting running services. Missing settings remain unchanged; an empty
+`METRICS_MANAGER_HOSTNAME=` restores the kernel hostname. Values are unquoted
+literals, with no shell expansion or spaces in binary paths; host tags accept
+letters, digits, `_`, `.`, `:` and `-`. `auto` is only for `ENABLE_*` options.
+Setting startup options does not enable Turbostat: use `ENABLE_TURBOSTAT=true`
+for that. The helper checks the effective binary with `--version` when enabling
+the input or changing its path.
+
+For direct edits, restart with
+`sudo systemctl try-restart 'metrics-manager-*.service'`; an environment-only
+edit needs no `daemon-reload`. The Turbostat drop-in must use
+`path = "${TURBOSTAT_BIN}"` and `interval = "${TURBOSTAT_INTERVAL}s"`.
+The helper migrates explicitly selected fields in both active and disabled
+`powerstat.d/turbostat.conf` files, preserving other local settings.
+The service supplies defaults if an upgrade retains an older environment file.
+
+Native deployment does not use container bind mounts or `make up` binary
+resolution. Install kernel-matched tools and choose an executable accessible
+inside the powerstat service's sandbox (not in a home or private temporary
+directory). Recheck version-specific paths after a kernel upgrade.
 
 Optional collectors are shipped as examples, not enabled by installation.
 Install only those needed on this machine (do not overwrite an existing,
@@ -180,7 +217,8 @@ Use `sudo systemctl disable --now metrics-manager-rapl.service` to stop it
 and keep it off after reboot. Its TUI panel appears only after samples arrive.
 
 For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
-binary matching the running kernel and verify `turbostat --version` succeeds
+binary matching the running kernel and verify the configured
+`TURBOSTAT_BIN --version` succeeds
 (`--help` can return a nonzero exit status even when the binary works).
 Turbostat reads CPU MSRs, so its example belongs in the **privileged**
 powerstat directory:

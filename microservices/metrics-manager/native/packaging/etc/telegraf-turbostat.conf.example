@@ -7,8 +7,9 @@
 #
 # Requires a turbostat binary built for the running kernel; on Debian/Ubuntu
 # this is commonly provided by linux-tools-$(uname -r). Check that
-# /usr/bin/turbostat --help works before enabling this input.
+# the configured TURBOSTAT_BIN --version works before enabling this input.
+# Set TURBOSTAT_BIN and TURBOSTAT_INTERVAL in metrics-manager.env.
 
 [[inputs.turbostat]]
-  path = "/usr/bin/turbostat"
-  interval = "5s"
+  path = "${TURBOSTAT_BIN}"
+  interval = "${TURBOSTAT_INTERVAL}s"

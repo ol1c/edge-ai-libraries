@@ -176,6 +176,9 @@ contents:
   - src: etc/telegraf-network.conf.example
     dst: /usr/share/doc/metrics-manager/examples/telegraf-network.conf
     file_info: { mode: 0644 }
+  - src: etc/telegraf-network-virtual.conf.example
+    dst: /usr/share/doc/metrics-manager/examples/telegraf-network-virtual.conf
+    file_info: { mode: 0644 }
   - src: etc/telegraf-storage.conf.example
     dst: /usr/share/doc/metrics-manager/examples/telegraf-storage.conf
     file_info: { mode: 0644 }

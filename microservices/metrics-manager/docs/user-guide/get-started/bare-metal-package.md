@@ -616,8 +616,9 @@ From the source checkout, edit
 The Bash script uses `sudo` when not already running as root and requires the
 installed package described above. It reads assignments as data, not shell
 commands. Each option accepts `true` (enable), `false` (disable), or `auto`
-(leave its current configuration and enablement unchanged). All options default
-to `auto`; omitted options also remain unchanged. Unknown keys, duplicate keys
+(leave its current configuration and enablement unchanged). Omitted options
+default to `auto`; review the selected values in your options file before running
+the script. Unknown keys, duplicate keys
 and invalid values are rejected before applying any changes.
 
 | Option | Controls |
@@ -628,6 +629,7 @@ and invalid values are rejected before applying any changes.
 | `ENABLE_TEMPERATURE` | `telegraf.d/temperature.conf`, including basicstats |
 | `ENABLE_INTERRUPTS` | `telegraf.d/interrupts.conf` |
 | `ENABLE_NETWORK` | `telegraf.d/network.conf`, including ethtool |
+| `ENABLE_NETWORK_VIRTUAL` | `telegraf.d/network-virtual.conf`, ethtool counters for host-side `veth*`/`lxc*` links only |
 | `ENABLE_STORAGE` | `telegraf.d/storage.conf` |
 
 For example, set `ENABLE_RAPL=true` and `ENABLE_POWERSTAT_EXTRA=true` to enable
@@ -637,6 +639,12 @@ when no local configuration exists. Existing active files are preserved;
 disabled files are restored on enable. Disabling renames a drop-in to
 `.conf.disabled`, retaining local settings. If both files already exist,
 disabling fails rather than overwriting either file.
+
+`ENABLE_NETWORK_VIRTUAL` is independent of `ENABLE_NETWORK`: disabling one
+does not disable the other. It adds no `inputs.net` collector and does not
+change existing traffic-interface selection. If your local `network.conf`
+already selects `veth*`/`lxc*` in `inputs.ethtool`, avoid selecting the same
+interfaces in the new drop-in. No extra privileges are required.
 
 Finally, the script runs `systemctl try-restart 'metrics-manager-*.service'`
 to reload all running Metrics Manager services. Unlike plain `restart`, this
@@ -1186,6 +1194,56 @@ The `.conf.disabled` file is not loaded. Telegraf configuration changes require
 a service restart; dashboard-only changes require restarting `mm-tui`.
 Container host-network visibility is a separate deployment concern: the native
 setup does not imply that an isolated container sees the host's interfaces.
+
+#### Virtual NIC counters and container metric coverage
+
+A container's `eth0` may use the `veth` driver, while the host's physical NIC
+uses a driver such as `e1000e`. The following container counters do not have
+equivalents on every physical NIC:
+
+- `ethtool_peer_ifindex`
+- `ethtool_rx_pp_alloc_*` and `ethtool_rx_pp_recycle_*`
+- `ethtool_rx_queue_0_drops` and `ethtool_rx_queue_0_xdp_*`
+- `ethtool_tx_queue_0_xdp_xmit` and `ethtool_tx_queue_0_xdp_xmit_errors`
+
+The existing Telegraf `ethtool` input supports these driver counters; no extra
+collector or synthetic zero values are needed. To collect them from host-side
+container links, install the current package, set `ENABLE_NETWORK_VIRTUAL=true`
+in `native/metrics-options.conf`, and run `native/configure-metrics.sh`.
+The separate packaged `telegraf-network-virtual.conf` example selects `veth*`
+and `lxc*`. Existing local settings are retained; adjust interface patterns in
+`/etc/metrics-manager/telegraf.d/network-virtual.conf` if needed.
+Set the option to `false` to disable this drop-in, or `auto` to leave it unchanged.
+
+```bash
+curl --fail --silent http://127.0.0.1:9273/metrics |
+  grep -E '^ethtool_(peer_ifindex|rx_pp_|rx_queue_0_|tx_queue_0_)'
+```
+
+These are the host endpoints' counters, not the same series as container
+`eth0`: `host`, `interface`, `peer_ifindex`, RX/TX direction and values may
+differ. Matching metric names establishes counter availability, not equality
+of monitored interfaces or readings. No matching links means no such series.
+Adding this drop-in does not modify `inputs.net`; avoid summing physical,
+bridge and virtual traffic as if each represented independent traffic.
+
+GPU frequency and throttling data also exist natively under different names:
+
+| Container name | Native name |
+| --- | --- |
+| `gpu_throttle_act_freq_mhz` | `gpu_frequency_act_freq` |
+| `gpu_throttle_driver_freq_mhz` | `gpu_frequency_cur_freq` |
+| `gpu_throttle_throttled` | `gpu_throttle_status` |
+| `gpu_throttle_throttle_pl1` | `gpu_throttle_pl1` |
+| `gpu_throttle_throttle_pl2` | `gpu_throttle_pl2` |
+| `gpu_throttle_throttle_prochot` | `gpu_throttle_prochot` |
+| `gpu_throttle_throttle_thermal` | `gpu_throttle_thermal` |
+
+Use native `gpu_id`, `driver` and `tile` labels instead of `card` and `gt`;
+the device identifiers must be matched to the actual hardware, not assumed
+numerically identical. No duplicate aliases are added. Compare available
+names separately from values, labels and Prometheus `TYPE` declarations:
+coverage is not a promise of an identical schema between deployments.
 
 #### Counter rates and missing data
 

@@ -50,11 +50,16 @@ expect_failure() {
     [[ ! -s "$LOG" ]] || fail "Invalid configuration caused side effects"
 }
 
-main "$NATIVE_DIR/metrics-options.conf" > "$WORK/stdout"
+# Local operator settings must not influence the test or touch host services.
+printf 'ENABLE_RAPL=auto\n' > "$WORK/options"
+main "$WORK/options" > "$WORK/stdout"
 [[ $(wc -l < "$LOG") == 1 ]] || fail "auto changed configuration"
 assert_logged "systemctl try-restart metrics-manager-*.service"
 
-bash "$NATIVE_DIR/configure-metrics.sh" > "$WORK/stdout"
+mkdir -p "$WORK/native"
+cp "$NATIVE_DIR/configure-metrics.sh" "$WORK/native/configure-metrics.sh"
+cp "$WORK/options" "$WORK/native/metrics-options.conf"
+bash "$WORK/native/configure-metrics.sh" > "$WORK/stdout"
 grep -Fxq 'ENABLE_RAPL=auto' "$WORK/stdout" || fail "Default options were not loaded"
 bash "$NATIVE_DIR/configure-metrics.sh" --help > "$WORK/stdout"
 grep -Fq 'Usage:' "$WORK/stdout" || fail "Help was not printed"
@@ -74,7 +79,7 @@ assert_logged "systemctl try-restart metrics-manager-*.service"
 [[ $(wc -l < "$LOG") == 2 ]] || fail "Unexpected service operation"
 
 prepare_paths
-for key in POWERSTAT_EXTRA TEMPERATURE INTERRUPTS NETWORK STORAGE; do
+for key in POWERSTAT_EXTRA TEMPERATURE INTERRUPTS NETWORK NETWORK_VIRTUAL STORAGE; do
     printf 'example %s\n' "$key" > "${examples[$key]}"
     printf 'ENABLE_%s=true\n' "$key" > "$WORK/options"
     main "$WORK/options" > "$WORK/stdout"
@@ -92,6 +97,30 @@ for key in POWERSTAT_EXTRA TEMPERATURE INTERRUPTS NETWORK STORAGE; do
     [[ $(< "${destinations[$key]}") == "local $key" ]] || fail "Local configuration not restored"
     [[ ! -e "${destinations[$key]}.disabled" ]] || fail "Disabled file not restored"
 done
+
+[[ "${destinations[NETWORK_VIRTUAL]}" == "$CONFIG_DIR/telegraf.d/network-virtual.conf" ]] ||
+    fail "Wrong virtual network destination"
+[[ "${examples[NETWORK_VIRTUAL]}" == "$EXAMPLES_DIR/telegraf-network-virtual.conf" ]] ||
+    fail "Wrong virtual network example"
+printf 'ENABLE_NETWORK=false\nENABLE_NETWORK_VIRTUAL=true\n' > "$WORK/options"
+main "$WORK/options" > "$WORK/stdout"
+[[ ! -e "${destinations[NETWORK]}" && -f "${destinations[NETWORK_VIRTUAL]}" ]] ||
+    fail "Virtual NIC collection depends on traffic collection"
+printf 'ENABLE_NETWORK=true\nENABLE_NETWORK_VIRTUAL=false\n' > "$WORK/options"
+main "$WORK/options" > "$WORK/stdout"
+[[ -f "${destinations[NETWORK]}" && ! -e "${destinations[NETWORK_VIRTUAL]}" ]] ||
+    fail "Disabling virtual NIC collection changed traffic collection"
+[[ $(< "${destinations[NETWORK]}") == "local NETWORK" ]] ||
+    fail "Network interface selection was overwritten"
+
+rm -- "${examples[NETWORK_VIRTUAL]}" "${destinations[NETWORK_VIRTUAL]}.disabled"
+printf 'ENABLE_RAPL=true\nENABLE_NETWORK_VIRTUAL=true\n' > "$WORK/options"
+expect_failure "$WORK/options" 'Missing example'
+printf 'virtual example\n' > "${examples[NETWORK_VIRTUAL]}"
+main "$WORK/options" > "$WORK/stdout"
+printf 'backup\n' > "${destinations[NETWORK_VIRTUAL]}.disabled"
+printf 'ENABLE_NETWORK_VIRTUAL=false\n' > "$WORK/options"
+expect_failure "$WORK/options" 'resolve the conflict first'
 
 # Turbostat can return 1 for help despite being installed and functional.
 cat > "$WORK/bin/turbostat" <<'EOF'

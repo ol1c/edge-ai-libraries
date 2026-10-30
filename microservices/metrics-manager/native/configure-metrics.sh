@@ -7,7 +7,7 @@ set -Eeuo pipefail
 NATIVE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CONFIG_DIR=/etc/metrics-manager
 EXAMPLES_DIR=/usr/share/doc/metrics-manager/examples
-OPTIONS=(RAPL POWERSTAT_EXTRA TURBOSTAT TEMPERATURE INTERRUPTS NETWORK STORAGE)
+OPTIONS=(RAPL POWERSTAT_EXTRA TURBOSTAT TEMPERATURE INTERRUPTS NETWORK NETWORK_VIRTUAL STORAGE)
 declare -A settings destinations examples
 
 fail() {
@@ -56,6 +56,8 @@ prepare_paths() {
         destinations[$key]="$CONFIG_DIR/telegraf.d/${key,,}.conf"
         examples[$key]="$EXAMPLES_DIR/telegraf-${key,,}.conf"
     done
+    destinations[NETWORK_VIRTUAL]="$CONFIG_DIR/telegraf.d/network-virtual.conf"
+    examples[NETWORK_VIRTUAL]="$EXAMPLES_DIR/telegraf-network-virtual.conf"
     destinations[POWERSTAT_EXTRA]="$CONFIG_DIR/powerstat.d/extra.conf"
     examples[POWERSTAT_EXTRA]="$EXAMPLES_DIR/telegraf-powerstat-extra.conf"
     destinations[TURBOSTAT]="$CONFIG_DIR/powerstat.d/turbostat.conf"

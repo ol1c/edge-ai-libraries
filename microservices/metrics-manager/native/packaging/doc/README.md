@@ -115,6 +115,43 @@ reinstalling it and losing your interface selection. Each corresponding TUI
 panel appears only after its metrics reach the endpoint. Remove an example
 from `telegraf.d` and restart the service to disable it.
 
+### Metric names and network namespaces
+
+The native GPU collector already provides the container's additional GPU
+frequency and throttling readings under different Prometheus names:
+
+| Container name | Native name |
+|---|---|
+| `gpu_throttle_act_freq_mhz` | `gpu_frequency_act_freq` |
+| `gpu_throttle_driver_freq_mhz` | `gpu_frequency_cur_freq` |
+| `gpu_throttle_throttled` | `gpu_throttle_status` |
+| `gpu_throttle_throttle_pl1` | `gpu_throttle_pl1` |
+| `gpu_throttle_throttle_pl2` | `gpu_throttle_pl2` |
+| `gpu_throttle_throttle_prochot` | `gpu_throttle_prochot` |
+| `gpu_throttle_throttle_thermal` | `gpu_throttle_thermal` |
+
+Native GPU series identify devices and tiles with `gpu_id`, `driver` and `tile`
+rather than `card` and `gt`; queries must use the corresponding native labels.
+
+The container's `eth0` can be a `veth` device, whereas the native service reads
+the host's network namespace. The `veth` driver exports `peer_ifindex`,
+`rx_pp_*` page-pool counters and per-queue XDP/drop counters that a physical
+NIC driver such as `e1000e` does not provide. These are not missing collectors:
+the existing `ethtool` input collects them when a matching interface is selected.
+To include host-side container links, set `ENABLE_NETWORK_VIRTUAL=true` in
+`native/metrics-options.conf` and run `native/configure-metrics.sh` after
+installing the current package. This manages a separate `network-virtual.conf`
+drop-in selecting `veth*` and `lxc*`, independently of `ENABLE_NETWORK`.
+Use `false` to disable it or `auto` to leave it unchanged. Existing local
+drop-ins are preserved. Adjust its patterns to local interface names and
+avoid selecting the same interfaces in another `inputs.ethtool` block.
+This does not select `eth0` inside a container or change `inputs.net`:
+including virtual interfaces there can double-count traffic. The host peer
+has its own counters and `peer_ifindex`, not the container endpoint's values.
+Unsupported driver counters are omitted, not synthesized as zero.
+
+### Additional privileged collectors
+
 Extra per-CPU powerstat measurements need the **privileged** Telegraf instance,
 not the regular `telegraf.d` directory:
 

@@ -14,4 +14,7 @@
 # Driver-specific NIC counters (availability and names depend on the driver).
 # Like net, this reads interfaces in the service's network namespace.
 [[inputs.ethtool]]
+  # veth peer/XDP/page-pool counters are not provided by physical NIC drivers.
+  # For host-side container links, enable the separate network-virtual example
+  # with ENABLE_NETWORK_VIRTUAL=true; do not also select those interfaces here.
   interface_include = ["eth*", "en*"]

@@ -559,18 +559,58 @@ authentication in front of either one before exposing it off the host.
 ## Configuration
 
 Settings shared by every service live in
-`/etc/metrics-manager/metrics-manager.env` — the `host` tag and the qmassa
-sampling interval. Telegraf itself is configured by
+`/etc/metrics-manager/metrics-manager.env` — the `host` tag, Turbostat executable
+and sampling interval, qmassa sampling interval and process limit. Telegraf itself is configured by
 `/etc/metrics-manager/telegraf.conf`, with local additions in
 `/etc/metrics-manager/telegraf.d/*.conf`, which is read afterwards and left
 alone by upgrades.
 
 ```bash
-sudo systemctl restart 'metrics-manager-*.service'
+sudo systemctl try-restart 'metrics-manager-*.service'
 ```
 
 These files are marked as configuration, so an upgrade preserves your edits and
 leaves the new packaged version alongside as `.dpkg-dist`.
+
+### Collector startup settings
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `TURBOSTAT_INTERVAL` | `5` | Positive integer sampling cadence in seconds for the optional Turbostat input |
+| `TURBOSTAT_BIN` | `/usr/bin/turbostat` | Absolute host path to Turbostat; normally the distribution wrapper selecting the running kernel's tools |
+| `METRICS_MANAGER_HOSTNAME` | empty (kernel hostname) | Stable `host=` tag shared by Telegraf and every native collector |
+
+These settings are for native services: there is no bind mount or `make up`
+binary resolution. Install tools matching the running kernel. A custom binary
+must be executable and accessible inside the powerstat service's sandbox:
+avoid home directories and private temporary directories; prefer `/usr/local/bin`
+or `/usr/lib/linux-tools/...`. Revisit version-specific paths after kernel upgrades.
+
+Edit the shared environment file directly, or use the configuration script below.
+For example, an options file containing only:
+
+```ini
+TURBOSTAT_INTERVAL=2
+TURBOSTAT_BIN=/usr/local/bin/turbostat
+METRICS_MANAGER_HOSTNAME=lab-node-42
+```
+
+changes these startup settings without enabling any collector. Add
+`ENABLE_TURBOSTAT=true` to enable that input too. Omitted startup settings remain
+unchanged; `METRICS_MANAGER_HOSTNAME=` restores the kernel hostname. Values in
+the helper's options file are unquoted literals: no shell expansion, spaces in
+binary paths, or `$(uname -r)`. Host tags may contain letters, digits, `_`, `.`,
+`:` and `-`. `auto` applies only to `ENABLE_*` options, not startup settings.
+
+The current Turbostat example reads `${TURBOSTAT_BIN}` and
+`${TURBOSTAT_INTERVAL}s` from the environment. When explicitly setting either
+Turbostat option, the helper also wires that field in existing active or
+disabled `powerstat.d/turbostat.conf` drop-ins, retaining all other settings.
+If editing the environment manually after upgrading, replace the old hard-coded
+`path` / `interval` assignments with those references first. The service has
+fallback defaults for older environment files that lack the new variables.
+Restart running services after direct edits; no `daemon-reload` is needed for
+environment-only changes. The helper performs the restart automatically.
 
 ### Optional telemetry: enable individual plugins
 
@@ -615,9 +655,11 @@ From the source checkout, edit
 
 The Bash script uses `sudo` when not already running as root and requires the
 installed package described above. It reads assignments as data, not shell
-commands. Each option accepts `true` (enable), `false` (disable), or `auto`
-(leave its current configuration and enablement unchanged). All options default
-to `auto`; omitted options also remain unchanged. Unknown keys, duplicate keys
+commands. Each `ENABLE_*` option accepts `true` (enable), `false` (disable), or `auto`
+(leave its current configuration and enablement unchanged). Omitted options
+default to `auto`; the [startup settings](#collector-startup-settings) above
+are also accepted and are left unchanged when omitted. Review the selected values in your options file before running
+the script. Unknown keys, duplicate keys
 and invalid values are rejected before applying any changes.
 
 | Option | Controls |
@@ -628,15 +670,23 @@ and invalid values are rejected before applying any changes.
 | `ENABLE_TEMPERATURE` | `telegraf.d/temperature.conf`, including basicstats |
 | `ENABLE_INTERRUPTS` | `telegraf.d/interrupts.conf` |
 | `ENABLE_NETWORK` | `telegraf.d/network.conf`, including ethtool |
+| `ENABLE_NETWORK_VIRTUAL` | `telegraf.d/network-virtual.conf`, ethtool counters for host-side `veth*`/`lxc*` links only |
 | `ENABLE_STORAGE` | `telegraf.d/storage.conf` |
 
 For example, set `ENABLE_RAPL=true` and `ENABLE_POWERSTAT_EXTRA=true` to enable
 both, or set either to `false` to disable it. RAPL uses `systemctl enable --now`
 or `disable --now`. Drop-ins are installed from the packaged examples only
-when no local configuration exists. Existing active files are preserved;
+when no local configuration exists. Existing active files are preserved except
+for explicitly selected Turbostat startup fields;
 disabled files are restored on enable. Disabling renames a drop-in to
 `.conf.disabled`, retaining local settings. If both files already exist,
 disabling fails rather than overwriting either file.
+
+`ENABLE_NETWORK_VIRTUAL` is independent of `ENABLE_NETWORK`: disabling one
+does not disable the other. It adds no `inputs.net` collector and does not
+change existing traffic-interface selection. If your local `network.conf`
+already selects `veth*`/`lxc*` in `inputs.ethtool`, avoid selecting the same
+interfaces in the new drop-in. No extra privileges are required.
 
 Finally, the script runs `systemctl try-restart 'metrics-manager-*.service'`
 to reload all running Metrics Manager services. Unlike plain `restart`, this
@@ -647,7 +697,8 @@ Command failures are reported and stop the script; changes already applied
 are not rolled back.
 
 Hardware and kernel prerequisites still apply. In particular, install matching
-Turbostat tools first (the script checks `/usr/bin/turbostat --version`), and review
+Turbostat tools first (the script checks the effective `TURBOSTAT_BIN --version`
+when enabling Turbostat or setting its binary path), and review
 Network interface and Storage mount/device selection as described below.
 Verify actual metrics at the endpoint; enabling a collector does not guarantee
 hardware support or immediate removal of cached samples.
@@ -764,7 +815,7 @@ If the enabled service publishes nothing, see
 Turbostat is an opt-in diagnostic for IPC, SMI, IRQ/NMI, core temperature and
 other CPU details. It runs in the **privileged** powerstat Telegraf service
 because it reads CPU MSRs; do not copy this example into `telegraf.d`. It needs
-`/usr/bin/turbostat` backed by tools for the *running kernel*. A wrapper
+`TURBOSTAT_BIN` (default `/usr/bin/turbostat`) backed by tools for the *running kernel*. A wrapper
 present in `/usr/bin` is not sufficient if it reports that no matching binary
 exists. On Debian/Ubuntu, install the matching `linux-tools-$(uname -r)`
 package if available, then verify `turbostat --version` succeeds before enabling.
@@ -781,8 +832,10 @@ curl -fsS http://127.0.0.1:9273/metrics |
   grep -E '^turbostat_(ipc|smi)'
 ```
 
-The example collects every five seconds, independently of Telegraf's 1s
-interval. Additional fields depend on the CPU and kernel. The TUI shows a
+The example collects every `TURBOSTAT_INTERVAL` seconds (default five),
+independently of Telegraf's 1s interval. Configure it and the executable through
+the [startup settings](#collector-startup-settings). Additional fields depend on
+the CPU and kernel. The TUI shows a
 Turbostat panel only when measurements arrive; a running service alone does
 not prove the external binary or its MSR permissions work. If the check above
 returns nothing, inspect `journalctl -u metrics-manager-powerstat.service`.
@@ -1186,6 +1239,56 @@ The `.conf.disabled` file is not loaded. Telegraf configuration changes require
 a service restart; dashboard-only changes require restarting `mm-tui`.
 Container host-network visibility is a separate deployment concern: the native
 setup does not imply that an isolated container sees the host's interfaces.
+
+#### Virtual NIC counters and container metric coverage
+
+A container's `eth0` may use the `veth` driver, while the host's physical NIC
+uses a driver such as `e1000e`. The following container counters do not have
+equivalents on every physical NIC:
+
+- `ethtool_peer_ifindex`
+- `ethtool_rx_pp_alloc_*` and `ethtool_rx_pp_recycle_*`
+- `ethtool_rx_queue_0_drops` and `ethtool_rx_queue_0_xdp_*`
+- `ethtool_tx_queue_0_xdp_xmit` and `ethtool_tx_queue_0_xdp_xmit_errors`
+
+The existing Telegraf `ethtool` input supports these driver counters; no extra
+collector or synthetic zero values are needed. To collect them from host-side
+container links, install the current package, set `ENABLE_NETWORK_VIRTUAL=true`
+in `native/metrics-options.conf`, and run `native/configure-metrics.sh`.
+The separate packaged `telegraf-network-virtual.conf` example selects `veth*`
+and `lxc*`. Existing local settings are retained; adjust interface patterns in
+`/etc/metrics-manager/telegraf.d/network-virtual.conf` if needed.
+Set the option to `false` to disable this drop-in, or `auto` to leave it unchanged.
+
+```bash
+curl --fail --silent http://127.0.0.1:9273/metrics |
+  grep -E '^ethtool_(peer_ifindex|rx_pp_|rx_queue_0_|tx_queue_0_)'
+```
+
+These are the host endpoints' counters, not the same series as container
+`eth0`: `host`, `interface`, `peer_ifindex`, RX/TX direction and values may
+differ. Matching metric names establishes counter availability, not equality
+of monitored interfaces or readings. No matching links means no such series.
+Adding this drop-in does not modify `inputs.net`; avoid summing physical,
+bridge and virtual traffic as if each represented independent traffic.
+
+GPU frequency and throttling data also exist natively under different names:
+
+| Container name | Native name |
+| --- | --- |
+| `gpu_throttle_act_freq_mhz` | `gpu_frequency_act_freq` |
+| `gpu_throttle_driver_freq_mhz` | `gpu_frequency_cur_freq` |
+| `gpu_throttle_throttled` | `gpu_throttle_status` |
+| `gpu_throttle_throttle_pl1` | `gpu_throttle_pl1` |
+| `gpu_throttle_throttle_pl2` | `gpu_throttle_pl2` |
+| `gpu_throttle_throttle_prochot` | `gpu_throttle_prochot` |
+| `gpu_throttle_throttle_thermal` | `gpu_throttle_thermal` |
+
+Use native `gpu_id`, `driver` and `tile` labels instead of `card` and `gt`;
+the device identifiers must be matched to the actual hardware, not assumed
+numerically identical. No duplicate aliases are added. Compare available
+names separately from values, labels and Prometheus `TYPE` declarations:
+coverage is not a promise of an identical schema between deployments.
 
 #### Counter rates and missing data
 

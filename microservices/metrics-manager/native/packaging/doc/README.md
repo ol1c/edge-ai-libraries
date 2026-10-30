@@ -80,11 +80,48 @@ authentication in front of either one before exposing it off the host.
 ## Configuration
 
 Settings shared by every service live in
-`/etc/metrics-manager/metrics-manager.env` — the `host` tag and the qmassa
-sampling interval. Telegraf itself is configured by
+`/etc/metrics-manager/metrics-manager.env` — the `host` tag, Turbostat executable
+and sampling interval, qmassa sampling interval and process limit. Telegraf itself is configured by
 `/etc/metrics-manager/telegraf.conf`, with local additions in
 `/etc/metrics-manager/telegraf.d/*.conf`, which is read afterwards and left
 alone by upgrades.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TURBOSTAT_INTERVAL` | `5` | Positive integer seconds between Turbostat samples |
+| `TURBOSTAT_BIN` | `/usr/bin/turbostat` | Absolute host path, normally the distribution's kernel-selecting wrapper |
+| `METRICS_MANAGER_HOSTNAME` | empty (kernel hostname) | Stable `host=` tag for all collectors |
+
+From a source checkout, set these in `native/metrics-options.conf` and run
+`native/configure-metrics.sh`, or pass a separate options file to that script:
+
+```ini
+TURBOSTAT_INTERVAL=2
+TURBOSTAT_BIN=/usr/local/bin/turbostat
+METRICS_MANAGER_HOSTNAME=lab-node-42
+```
+
+The helper persists selected values in the shared environment file before
+restarting running services. Missing settings remain unchanged; an empty
+`METRICS_MANAGER_HOSTNAME=` restores the kernel hostname. Values are unquoted
+literals, with no shell expansion or spaces in binary paths; host tags accept
+letters, digits, `_`, `.`, `:` and `-`. `auto` is only for `ENABLE_*` options.
+Setting startup options does not enable Turbostat: use `ENABLE_TURBOSTAT=true`
+for that. The helper checks the effective binary with `--version` when enabling
+the input or changing its path.
+
+For direct edits, restart with
+`sudo systemctl try-restart 'metrics-manager-*.service'`; an environment-only
+edit needs no `daemon-reload`. The Turbostat drop-in must use
+`path = "${TURBOSTAT_BIN}"` and `interval = "${TURBOSTAT_INTERVAL}s"`.
+The helper migrates explicitly selected fields in both active and disabled
+`powerstat.d/turbostat.conf` files, preserving other local settings.
+The service supplies defaults if an upgrade retains an older environment file.
+
+Native deployment does not use container bind mounts or `make up` binary
+resolution. Install kernel-matched tools and choose an executable accessible
+inside the powerstat service's sandbox (not in a home or private temporary
+directory). Recheck version-specific paths after a kernel upgrade.
 
 Optional collectors are shipped as examples, not enabled by installation.
 Install only those needed on this machine (do not overwrite an existing,
@@ -115,6 +152,43 @@ reinstalling it and losing your interface selection. Each corresponding TUI
 panel appears only after its metrics reach the endpoint. Remove an example
 from `telegraf.d` and restart the service to disable it.
 
+### Metric names and network namespaces
+
+The native GPU collector already provides the container's additional GPU
+frequency and throttling readings under different Prometheus names:
+
+| Container name | Native name |
+|---|---|
+| `gpu_throttle_act_freq_mhz` | `gpu_frequency_act_freq` |
+| `gpu_throttle_driver_freq_mhz` | `gpu_frequency_cur_freq` |
+| `gpu_throttle_throttled` | `gpu_throttle_status` |
+| `gpu_throttle_throttle_pl1` | `gpu_throttle_pl1` |
+| `gpu_throttle_throttle_pl2` | `gpu_throttle_pl2` |
+| `gpu_throttle_throttle_prochot` | `gpu_throttle_prochot` |
+| `gpu_throttle_throttle_thermal` | `gpu_throttle_thermal` |
+
+Native GPU series identify devices and tiles with `gpu_id`, `driver` and `tile`
+rather than `card` and `gt`; queries must use the corresponding native labels.
+
+The container's `eth0` can be a `veth` device, whereas the native service reads
+the host's network namespace. The `veth` driver exports `peer_ifindex`,
+`rx_pp_*` page-pool counters and per-queue XDP/drop counters that a physical
+NIC driver such as `e1000e` does not provide. These are not missing collectors:
+the existing `ethtool` input collects them when a matching interface is selected.
+To include host-side container links, set `ENABLE_NETWORK_VIRTUAL=true` in
+`native/metrics-options.conf` and run `native/configure-metrics.sh` after
+installing the current package. This manages a separate `network-virtual.conf`
+drop-in selecting `veth*` and `lxc*`, independently of `ENABLE_NETWORK`.
+Use `false` to disable it or `auto` to leave it unchanged. Existing local
+drop-ins are preserved. Adjust its patterns to local interface names and
+avoid selecting the same interfaces in another `inputs.ethtool` block.
+This does not select `eth0` inside a container or change `inputs.net`:
+including virtual interfaces there can double-count traffic. The host peer
+has its own counters and `peer_ifindex`, not the container endpoint's values.
+Unsupported driver counters are omitted, not synthesized as zero.
+
+### Additional privileged collectors
+
 Extra per-CPU powerstat measurements need the **privileged** Telegraf instance,
 not the regular `telegraf.d` directory:
 
@@ -143,7 +217,8 @@ Use `sudo systemctl disable --now metrics-manager-rapl.service` to stop it
 and keep it off after reboot. Its TUI panel appears only after samples arrive.
 
 For opt-in IPC/SMI and other Turbostat diagnostics, first install a turbostat
-binary matching the running kernel and verify `turbostat --version` succeeds
+binary matching the running kernel and verify the configured
+`TURBOSTAT_BIN --version` succeeds
 (`--help` can return a nonzero exit status even when the binary works).
 Turbostat reads CPU MSRs, so its example belongs in the **privileged**
 powerstat directory:

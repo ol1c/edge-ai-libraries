@@ -53,7 +53,158 @@ class TestHealthEndpoints:
         assert "metrics_store" in data
 
 
+class TestCpuCoreTypes:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("0-5", list(range(6))),
+            ("8,0-2,2,10-11", [0, 1, 2, 8, 10, 11]),
+            (" 2, 4-5\n", [2, 4, 5]),
+            ("", []),
+            (None, None),
+            ("3-1", None),
+            ("0-2,invalid", None),
+            ("-1", None),
+            ("0,,2", None),
+            ("0-2,", None),
+        ],
+    )
+    def test_parse_cpu_list(self, value: str | None, expected: list[int] | None):
+        assert capabilities._parse_cpu_list(value) == expected
+
+    def test_hybrid_pmu_reports_logical_cpu_membership(self, monkeypatch: pytest.MonkeyPatch):
+        files = {
+            "/sys/devices/cpu_core/cpus": "0-5",
+            "/sys/devices/cpu_atom/cpus": "6-13",
+            "/sys/devices/cpu_lowpower/cpus": "14-15",
+        }
+        monkeypatch.setattr(capabilities, "_read_text", files.get)
+        monkeypatch.setattr(capabilities.Path, "glob", lambda self, pattern: iter(()))
+
+        result = capabilities._cpu_core_type_counts(16)
+
+        assert result["p_core_cpus"] == list(range(6))
+        assert result["e_core_cpus"] == list(range(6, 14))
+        assert result["lp_e_core_cpus"] == [14, 15]
+        assert result["p_cores"] == 6
+        assert result["e_cores"] == 8
+        assert result["lp_e_cores"] == 2
+        assert result["source"] == "sysfs_hybrid_pmu"
+
+    @pytest.mark.parametrize(
+        ("pmus", "expected_p", "expected_e", "expected_lp_e", "source"),
+        [
+            ({}, [0, 1], [2, 3], None, "sysfs_core_type"),
+            ({"cpu_core": "invalid"}, [0, 1], [2, 3], None, "sysfs_core_type"),
+            (
+                {"cpu_lowpower": "3"},
+                [0, 1],
+                [2],
+                [3],
+                "sysfs_core_type+sysfs_hybrid_pmu",
+            ),
+            (
+                {"cpu_atom": "2-3", "cpu_lowpower": "3"},
+                [0, 1],
+                [2],
+                [3],
+                "sysfs_core_type+sysfs_hybrid_pmu",
+            ),
+            (
+                {"cpu_core": "0", "cpu_atom": "2", "cpu_lowpower": "3"},
+                [0],
+                [2],
+                [3],
+                "sysfs_hybrid_pmu",
+            ),
+        ],
+    )
+    def test_topology_fallback_and_pmu_precedence(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        pmus: dict[str, str],
+        expected_p: list[int],
+        expected_e: list[int],
+        expected_lp_e: list[int] | None,
+        source: str,
+    ):
+        topology_files = {
+            f"/sys/devices/system/cpu/cpu{cpu}/topology/core_type": raw_type
+            for cpu, raw_type in enumerate(("2", "2", "1", "1"))
+        }
+        files = {
+            **topology_files,
+            **{f"/sys/devices/{pmu}/cpus": cpus for pmu, cpus in pmus.items()},
+        }
+        monkeypatch.setattr(capabilities, "_read_text", files.get)
+        monkeypatch.setattr(
+            capabilities.Path,
+            "glob",
+            lambda self, pattern: (capabilities.Path(path) for path in topology_files),
+        )
+
+        result = capabilities._cpu_core_type_counts(4)
+
+        assert result["p_core_cpus"] == expected_p
+        assert result["e_core_cpus"] == expected_e
+        assert result["lp_e_core_cpus"] == expected_lp_e
+        assert result["p_cores"] == len(expected_p)
+        assert result["e_cores"] == len(expected_e)
+        assert result["lp_e_cores"] == (len(expected_lp_e) if expected_lp_e is not None else None)
+        assert result["raw_core_type_counts"] == {"1": 2, "2": 2}
+        assert result["source"] == source
+
+    @pytest.mark.parametrize("pmu_value", [None, ""])
+    def test_unavailable_and_empty_cpu_lists(
+        self, monkeypatch: pytest.MonkeyPatch, pmu_value: str | None
+    ):
+        monkeypatch.setattr(capabilities, "_read_text", lambda path: pmu_value)
+        monkeypatch.setattr(capabilities.Path, "glob", lambda self, pattern: iter(()))
+
+        result = capabilities._cpu_core_type_counts(0)
+
+        for core_type in ("p", "e", "lp_e"):
+            assert result[f"{core_type}_core_cpus"] == ([] if pmu_value == "" else None)
+            assert result[f"{core_type}_cores"] == (0 if pmu_value == "" else None)
+        assert result["raw_core_type_counts"] == {}
+        assert result["source"] == ("sysfs_hybrid_pmu" if pmu_value == "" else "unavailable")
+
+
 class TestCapabilitiesEndpoint:
+    @pytest.mark.parametrize("profile", ["minimal", "expanded"])
+    def test_capabilities_reports_cpu_membership_by_type(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, profile: str
+    ):
+        files = {
+            "/sys/devices/cpu_core/cpus": "0-5",
+            "/sys/devices/cpu_atom/cpus": "6-13",
+            "/sys/devices/cpu_lowpower/cpus": "14-15",
+            "/proc/cpuinfo": "\n\n".join(
+                f"processor\t: {cpu}\nphysical id\t: 0\ncore id\t: {cpu}" for cpu in range(16)
+            ),
+        }
+        monkeypatch.setattr(capabilities, "_read_text", files.get)
+        monkeypatch.setattr(capabilities, "_detect_inference_runtimes", lambda: {})
+        monkeypatch.setattr(capabilities, "_detect_openvino_available_devices", set)
+        monkeypatch.setattr(capabilities, "_detect_runtime_media_codecs", lambda: {})
+
+        response = client.get(f"/api/v1/capabilities?profile={profile}")
+
+        assert response.status_code == 200
+        cpu = next(device for device in response.json()["devices"] if device["category"] == "cpu")
+        if profile == "minimal":
+            cores = cpu["details"]["cores"]
+            assert cores["logical"] == 16
+        else:
+            cores = cpu["specs"]["topology"]
+            assert cores["logical_cores"] == 16
+        assert cores["p_core_cpus"] == list(range(6))
+        assert cores["e_core_cpus"] == list(range(6, 14))
+        assert cores["lp_e_core_cpus"] == [14, 15]
+        assert cores["p_cores"] == 6
+        assert cores["e_cores"] == 8
+        assert cores["lp_e_cores"] == 2
+
     def test_capabilities_minimal_returns_categorized_high_level_data(self, client: TestClient):
         response = client.get("/api/v1/capabilities")
         assert response.status_code == 200

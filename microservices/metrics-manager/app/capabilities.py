@@ -1631,36 +1631,68 @@ def _cpu_cache_specs() -> list[dict[str, Any]]:
     return entries
 
 
+def _parse_cpu_list(cpu_list: str | None) -> list[int] | None:
+    """Parse a sysfs CPU list such as '0-5,8,10-12'; None means unavailable/invalid."""
+    if cpu_list is None:
+        return None
+    if not cpu_list.strip():
+        return []
+
+    cpus: set[int] = set()
+    for part in cpu_list.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", part.strip())
+        if match is None:
+            return None
+        first = int(match.group(1))
+        last = int(match.group(2)) if match.group(2) is not None else first
+        if last < first:
+            return None
+        cpus.update(range(first, last + 1))
+    return sorted(cpus)
+
+
 def _cpu_core_type_counts(logical_cores: int) -> dict[str, Any]:
-    """Infer E-core/P-core counts when kernel core_type is available.
+    """Report logical CPU membership, preferring hybrid PMUs over topology/core_type.
 
-    Linux commonly reports core_type values as:
-    - 1: efficiency/atom
-    - 2: performance/core
-    These mappings are not guaranteed on every platform, so raw values are
-    also returned for transparency.
+    core_type values 1 (Atom/E) and 2 (Core/P) provide a best-effort fallback,
+    but cannot distinguish LP-E. Raw per-thread counts are retained as metadata.
     """
-    core_type_files = sorted(Path("/sys/devices/system/cpu").glob("cpu[0-9]*/topology/core_type"))
-    if not core_type_files:
-        return {
-            "p_cores": None,
-            "e_cores": None,
-            "raw_core_type_counts": {},
-            "source": "unavailable",
-        }
+    cpu_lists = {
+        core_type: _parse_cpu_list(_read_text(f"/sys/devices/{pmu}/cpus"))
+        for core_type, pmu in (
+            ("p", "cpu_core"),
+            ("e", "cpu_atom"),
+            ("lp_e", "cpu_lowpower"),
+        )
+    }
+    sources: set[str] = set()
+    if any(cpus is not None for cpus in cpu_lists.values()):
+        sources.add("sysfs_hybrid_pmu")
 
-    type_counts: dict[str, int] = {}
-    for file_path in core_type_files:
+    type_cpus: dict[str, list[int]] = {}
+    for file_path in sorted(Path("/sys/devices/system/cpu").glob("cpu[0-9]*/topology/core_type")):
         raw = _read_text(str(file_path))
         if raw is None:
             continue
-        type_counts[raw] = type_counts.get(raw, 0) + 1
+        cpu_id = int(file_path.parent.parent.name.removeprefix("cpu"))
+        type_cpus.setdefault(raw, []).append(cpu_id)
+
+    for core_type, raw_type in (("p", "2"), ("e", "1")):
+        if cpu_lists[core_type] is None and raw_type in type_cpus:
+            cpu_lists[core_type] = sorted(type_cpus[raw_type])
+            sources.add("sysfs_core_type")
+
+    if cpu_lists["e"] is not None and cpu_lists["lp_e"] is not None:
+        cpu_lists["e"] = sorted(set(cpu_lists["e"]) - set(cpu_lists["lp_e"]))
 
     return {
-        "p_cores": type_counts.get("2"),
-        "e_cores": type_counts.get("1"),
-        "raw_core_type_counts": type_counts,
-        "source": "sysfs_core_type",
+        **{
+            f"{core_type}_cores": len(cpus) if cpus is not None else None
+            for core_type, cpus in cpu_lists.items()
+        },
+        **{f"{core_type}_core_cpus": cpus for core_type, cpus in cpu_lists.items()},
+        "raw_core_type_counts": {raw: len(cpus) for raw, cpus in type_cpus.items()},
+        "source": "+".join(sorted(sources)) if sources else "unavailable",
         "logical_cores_seen": logical_cores,
     }
 
@@ -1715,6 +1747,10 @@ def _cpu_specs() -> dict[str, Any]:
         "sockets": socket_count,
         "e_cores": core_type.get("e_cores"),
         "p_cores": core_type.get("p_cores"),
+        "lp_e_cores": core_type.get("lp_e_cores"),
+        "p_core_cpus": core_type.get("p_core_cpus"),
+        "e_core_cpus": core_type.get("e_core_cpus"),
+        "lp_e_core_cpus": core_type.get("lp_e_core_cpus"),
         "core_type_metadata": {
             "raw_core_type_counts": core_type.get("raw_core_type_counts"),
             "source": core_type.get("source"),
@@ -2048,6 +2084,10 @@ def _expanded_capabilities_snapshot() -> dict[str, Any]:
                     "sockets": cpu_specs.get("sockets"),
                     "p_cores": cpu_specs.get("p_cores"),
                     "e_cores": cpu_specs.get("e_cores"),
+                    "lp_e_cores": cpu_specs.get("lp_e_cores"),
+                    "p_core_cpus": cpu_specs.get("p_core_cpus"),
+                    "e_core_cpus": cpu_specs.get("e_core_cpus"),
+                    "lp_e_core_cpus": cpu_specs.get("lp_e_core_cpus"),
                     "core_type_metadata": cpu_specs.get("core_type_metadata"),
                 },
                 "frequency": cpu_specs.get("frequency"),
@@ -2161,6 +2201,10 @@ def _minimal_from_expanded(expanded: dict[str, Any]) -> dict[str, Any]:
                     "physical": topology.get("physical_cores"),
                     "p_cores": topology.get("p_cores"),
                     "e_cores": topology.get("e_cores"),
+                    "lp_e_cores": topology.get("lp_e_cores"),
+                    "p_core_cpus": topology.get("p_core_cpus"),
+                    "e_core_cpus": topology.get("e_core_cpus"),
+                    "lp_e_core_cpus": topology.get("lp_e_core_cpus"),
                 },
                 "sockets": topology.get("sockets"),
             }

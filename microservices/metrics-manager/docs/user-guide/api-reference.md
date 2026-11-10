@@ -100,6 +100,36 @@ Use `expanded` for full technical inventory.
   - `minimal` (default)
   - `expanded`
 
+### CPU Core Types
+
+Logical CPU membership is reported under the CPU device's `details.cores` in
+the minimal profile and `specs.topology` in the expanded profile:
+
+```json
+{
+  "p_cores": 6,
+  "e_cores": 8,
+  "lp_e_cores": 2,
+  "p_core_cpus": [0, 1, 2, 3, 4, 5],
+  "e_core_cpus": [6, 7, 8, 9, 10, 11, 12, 13],
+  "lp_e_core_cpus": [14, 15]
+}
+```
+
+The lists contain sorted logical CPU IDs, not physical core IDs. The type
+counts are the lengths of these lists, including SMT threads where present.
+P, E, and low-power E (LP-E) lists come from `/sys/devices/cpu_core/cpus`,
+`/sys/devices/cpu_atom/cpus`, and `/sys/devices/cpu_lowpower/cpus`, respectively.
+CPUs identified as LP-E are excluded from the E list, even if an Atom PMU
+also includes them.
+
+If a PMU list is unavailable or malformed, per-CPU `topology/core_type` values
+provide a best-effort P/E fallback (`2` for P, `1` for E). LP-E is not inferred
+from frequency or cache properties. An unavailable type is reported as `null`
+for both its list and count; an available but empty PMU list is `[]` with count
+`0`. The expanded profile's `core_type_metadata` retains the raw `core_type`
+counts and identifies the discovery source(s).
+
 ### Example Response Shape
 
 ```json

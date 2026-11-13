@@ -93,6 +93,12 @@ Pamiec idle: `68714496 / 1024 / 1024 = 65.53125 MiB`.
 Na poczatku brakowalo Go, pip, pytest, OpenVINO, Telegrafa, Node/npm i Dockera.
 Nie wykonywano instalacji globalnej ani zmian sterownika/userspace NPU.
 
+**Docker nie byl uzywany.** Polecenie `docker ps` zwrocilo `command not found`
+(kod wyjscia 127). Nie budowano ani nie uruchamiano obrazow Docker,
+nie tworzono kontenerow ani wolumenow. Kolektor zbudowano bezposrednio
+z checkoutu, a testy wykonano w tymczasowym venv i z przenosnymi narzedziami
+Go, Telegraf oraz Node.
+
 Do `/tmp/npu-validation-5QMDcMch` pobrano lub zainstalowano:
 
 - Python venv na Python 3.12.3 i przenosny pip 26.3.
